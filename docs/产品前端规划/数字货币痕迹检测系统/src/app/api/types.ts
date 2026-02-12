@@ -154,6 +154,9 @@ export type ReportContentResponse = {
   report: ReportInfo | null;
   content?: string;
   content_length?: number;
+  // 后端对 ZIP/PDF 这类二进制报告不会内联 content（只允许 download）。
+  content_available?: boolean;
+  content_omitted_reason?: string;
 };
 
 export type ScanAllJob = {
@@ -201,3 +204,13 @@ export type ScanAllJob = {
   error?: string;
 };
 
+// 链上余额查询（当前仅 EVM 原生币余额）
+export type ChainEVMBalancesResponse = {
+  ok: boolean;
+  chain: "evm";
+  rpc_url: string;
+  symbol: string;
+  balances: Record<string, Record<string, string>>; // address -> { WEI, ETH, ... }
+  warnings?: string[];
+  addr_count: number;
+};

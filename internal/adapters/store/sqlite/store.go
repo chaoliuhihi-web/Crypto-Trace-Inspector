@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"crypto-inspector/internal/domain/model"
@@ -433,15 +434,23 @@ func (s *Store) ListCaseHitDetails(ctx context.Context, caseID, hitType string) 
 		err  error
 	)
 
+	// 重要：这里不能在 rows.Next() 循环里再发起子查询（例如按 hit_id 再查 artifact_ids），
+	// 因为 webapp/CLI 都把 SQLite 连接池设置为单连接（SetMaxOpenConns(1)），
+	// 子查询会等待“第二条连接”而导致死锁。
+	//
+	// 解决方式：使用 LEFT JOIN + GROUP_CONCAT 一次性把 artifact_id 聚合回来。
 	if hitType == "" {
 		rows, err = s.db.QueryContext(ctx, `
 			SELECT
 				h.hit_id, h.case_id, h.device_id, h.hit_type, h.rule_id,
 				COALESCE(h.rule_name, ''), COALESCE(h.rule_version, ''), h.matched_value,
 				COALESCE(h.first_seen_at, 0), COALESCE(h.last_seen_at, 0),
-				h.confidence, h.verdict, COALESCE(h.detail_json, '{}')
+				h.confidence, h.verdict, COALESCE(h.detail_json, '{}'),
+				COALESCE(GROUP_CONCAT(l.artifact_id, ','), '')
 			FROM rule_hits h
+			LEFT JOIN hit_artifact_links l ON l.hit_id = h.hit_id
 			WHERE h.case_id = ?
+			GROUP BY h.hit_id
 			ORDER BY h.hit_type, h.confidence DESC, h.last_seen_at DESC
 		`, caseID)
 	} else {
@@ -450,9 +459,12 @@ func (s *Store) ListCaseHitDetails(ctx context.Context, caseID, hitType string) 
 				h.hit_id, h.case_id, h.device_id, h.hit_type, h.rule_id,
 				COALESCE(h.rule_name, ''), COALESCE(h.rule_version, ''), h.matched_value,
 				COALESCE(h.first_seen_at, 0), COALESCE(h.last_seen_at, 0),
-				h.confidence, h.verdict, COALESCE(h.detail_json, '{}')
+				h.confidence, h.verdict, COALESCE(h.detail_json, '{}'),
+				COALESCE(GROUP_CONCAT(l.artifact_id, ','), '')
 			FROM rule_hits h
+			LEFT JOIN hit_artifact_links l ON l.hit_id = h.hit_id
 			WHERE h.case_id = ? AND h.hit_type = ?
+			GROUP BY h.hit_id
 			ORDER BY h.hit_type, h.confidence DESC, h.last_seen_at DESC
 		`, caseID, hitType)
 	}
@@ -464,6 +476,7 @@ func (s *Store) ListCaseHitDetails(ctx context.Context, caseID, hitType string) 
 	var out []model.HitDetail
 	for rows.Next() {
 		var item model.HitDetail
+		var artifactIDsRaw string
 		if err := rows.Scan(
 			&item.HitID,
 			&item.CaseID,
@@ -478,15 +491,25 @@ func (s *Store) ListCaseHitDetails(ctx context.Context, caseID, hitType string) 
 			&item.Confidence,
 			&item.Verdict,
 			&item.DetailJSON,
+			&artifactIDsRaw,
 		); err != nil {
 			return nil, fmt.Errorf("scan hit detail: %w", err)
 		}
 
-		ids, err := s.listArtifactIDsByHit(ctx, item.HitID)
-		if err != nil {
-			return nil, err
+		if strings.TrimSpace(artifactIDsRaw) != "" {
+			parts := strings.Split(artifactIDsRaw, ",")
+			ids := make([]string, 0, len(parts))
+			for _, p := range parts {
+				p = strings.TrimSpace(p)
+				if p != "" {
+					ids = append(ids, p)
+				}
+			}
+			sort.Strings(ids)
+			item.ArtifactIDs = ids
+		} else {
+			item.ArtifactIDs = []string{}
 		}
-		item.ArtifactIDs = ids
 		out = append(out, item)
 	}
 	if err := rows.Err(); err != nil {

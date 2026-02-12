@@ -48,6 +48,11 @@ export default function HitAnalysis() {
   const [hits, setHits] = useState<HitDetail[]>([]);
   const [devices, setDevices] = useState<CaseDevice[]>([]);
   const [selectedHitId, setSelectedHitId] = useState<string>("");
+  const [rpcURL, setRpcURL] = useState<string>("");
+  const [symbol, setSymbol] = useState<string>("ETH");
+  const [addrText, setAddrText] = useState<string>("");
+  const [balanceOut, setBalanceOut] = useState<string>("");
+  const [querying, setQuerying] = useState<boolean>(false);
 
   useEffect(() => {
     (async () => {
@@ -332,7 +337,97 @@ export default function HitAnalysis() {
           )}
         </div>
       </div>
+
+      {/* 链上余额查询 */}
+      <div className="bg-[#1e2127]/80 backdrop-blur-sm border border-[#3a3f4a] rounded p-4 mt-6 shadow-lg">
+        <h3 className="text-sm font-bold text-[#4fc3f7] mb-4 border-b border-[#3a3f4a] pb-2">
+          链上余额查询（EVM 原生币）
+        </h3>
+
+        <div className="text-xs text-[#7a7f8a] mb-3">
+          说明：当前仅支持 EVM 的 eth_getBalance（原生币余额）。正式环境建议配置私有 RPC。余额同时返回 WEI（精确整数）与 {symbol || "ETH"}（18 位小数格式）。
+        </div>
+
+        <div className="grid grid-cols-2 gap-6 mb-4">
+          <div className="space-y-3">
+            <div className="flex items-center">
+              <label className="w-24 text-[#b8bcc4] text-xs">RPC URL：</label>
+              <input
+                value={rpcURL}
+                onChange={(e) => setRpcURL(e.target.value)}
+                placeholder="可选；为空则使用默认公共 RPC"
+                className="flex-1 bg-[#252931] border border-[#3a3f4a] px-2 py-1 text-xs text-[#e8e8e8] rounded focus:outline-none focus:border-[#4fc3f7]"
+              />
+            </div>
+            <div className="flex items-center">
+              <label className="w-24 text-[#b8bcc4] text-xs">Symbol：</label>
+              <input
+                value={symbol}
+                onChange={(e) => setSymbol(e.target.value)}
+                placeholder="ETH"
+                className="flex-1 bg-[#252931] border border-[#3a3f4a] px-2 py-1 text-xs text-[#e8e8e8] rounded focus:outline-none focus:border-[#4fc3f7]"
+              />
+            </div>
+            <div className="flex items-start">
+              <label className="w-24 text-[#b8bcc4] text-xs pt-1">地址列表：</label>
+              <textarea
+                rows={6}
+                value={addrText}
+                onChange={(e) => setAddrText(e.target.value)}
+                placeholder={"一行一个地址，或用空格/逗号分隔\\n0x...\\n0x..."}
+                className="flex-1 bg-[#252931] border border-[#3a3f4a] px-2 py-1 text-xs text-[#e8e8e8] rounded focus:outline-none focus:border-[#4fc3f7] resize-none font-mono"
+              />
+            </div>
+            <div className="flex gap-2">
+              <button
+                disabled={querying}
+                onClick={async () => {
+                  const addrs = addrText
+                    .split(/[\n\r\t ,;]+/g)
+                    .map((s) => s.trim())
+                    .filter(Boolean);
+                  if (addrs.length === 0) {
+                    setBalanceOut("请输入至少 1 个地址。");
+                    return;
+                  }
+                  setQuerying(true);
+                  setBalanceOut("");
+                  try {
+                    const res = await api.queryEVMBalances({
+                      rpc_url: rpcURL.trim() || undefined,
+                      symbol: symbol.trim() || undefined,
+                      addresses: addrs,
+                    });
+                    setBalanceOut(JSON.stringify(res, null, 2));
+                  } catch (e: any) {
+                    setBalanceOut(`ERROR: ${e?.message || String(e)}`);
+                  } finally {
+                    setQuerying(false);
+                  }
+                }}
+                className="bg-[#2b5278] hover:bg-[#365f8a] disabled:opacity-50 border border-[#4fc3f7] text-[#4fc3f7] px-6 py-2 text-xs rounded transition-colors"
+              >
+                [{querying ? "查询中..." : "查询余额"}]
+              </button>
+              <button
+                onClick={() => setBalanceOut("")}
+                className="bg-[#1e2127] hover:bg-[#252931] border border-[#5a5f6a] text-[#b8bcc4] px-6 py-2 text-xs rounded transition-colors"
+              >
+                清空结果
+              </button>
+            </div>
+          </div>
+
+          <div>
+            <div className="text-xs text-[#b8bcc4] mb-2">查询结果（JSON）</div>
+            <div className="bg-[#0d0f12] border border-[#3a3f4a] rounded p-3 overflow-x-auto max-h-72">
+              <pre className="text-[10px] text-[#e8e8e8] font-mono leading-relaxed">
+                {balanceOut || "(empty)"}
+              </pre>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
-

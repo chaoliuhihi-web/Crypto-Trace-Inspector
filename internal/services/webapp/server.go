@@ -27,6 +27,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/cases/", s.handleCaseRoutes)
 	mux.HandleFunc("/api/reports/", s.handleReportRoutes)
 	mux.HandleFunc("/api/artifacts/", s.handleArtifactRoutes)
+	mux.HandleFunc("/api/chain/", s.handleChainRoutes)
 	mux.HandleFunc("/api/jobs/scan-all", s.handleJobScanAll)
 	mux.HandleFunc("/api/jobs/", s.handleJobRoutes)
 

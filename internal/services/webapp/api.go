@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"crypto-inspector/internal/domain/model"
+	"crypto-inspector/internal/services/forensicexport"
+	"crypto-inspector/internal/services/forensicpdf"
 )
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -108,6 +110,17 @@ func (s *Server) handleCaseRoutes(w http.ResponseWriter, r *http.Request) {
 		s.handleCaseReports(w, r, caseID)
 	case "report":
 		s.handleCaseReport(w, r, caseID)
+	case "exports":
+		// /api/cases/{case_id}/exports/{kind}
+		//
+		// 目前支持：
+		// - POST /api/cases/{case_id}/exports/forensic-zip
+		// - POST /api/cases/{case_id}/exports/forensic-pdf
+		restParts := []string{}
+		if len(parts) > 2 {
+			restParts = parts[2:]
+		}
+		s.handleCaseExports(w, r, caseID, restParts)
 	case "prechecks":
 		s.handleCasePrechecks(w, r, caseID)
 	case "audits":
@@ -202,7 +215,8 @@ func (s *Server) handleCaseReport(w http.ResponseWriter, r *http.Request, caseID
 	}
 
 	out := map[string]any{"report": report}
-	if includeContent {
+	// 只有文本类报告才允许内联内容。ZIP/PDF 属于二进制产物，只能走 download。
+	if includeContent && (report.ReportType == "internal_json" || report.ReportType == "internal_html") {
 		raw, err := os.ReadFile(report.FilePath)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
@@ -210,8 +224,127 @@ func (s *Server) handleCaseReport(w http.ResponseWriter, r *http.Request, caseID
 		}
 		out["content"] = string(raw)
 		out["content_length"] = len(raw)
+		out["content_available"] = true
+	} else {
+		out["content_available"] = false
+		if includeContent {
+			out["content_omitted_reason"] = "binary_report_or_not_supported"
+		}
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// handleCaseExports 负责导出/取证产物生成入口（内测模式先走同步生成，后续可升级为后台任务）。
+func (s *Server) handleCaseExports(w http.ResponseWriter, r *http.Request, caseID string, parts []string) {
+	if len(parts) < 1 {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+	kind := strings.TrimSpace(parts[0])
+
+	switch kind {
+	case "forensic-zip":
+		s.handleCaseExportForensicZip(w, r, caseID)
+	case "forensic-pdf":
+		s.handleCaseExportForensicPDF(w, r, caseID)
+	default:
+		w.WriteHeader(http.StatusNotFound)
+	}
+}
+
+func (s *Server) handleCaseExportForensicZip(w http.ResponseWriter, r *http.Request, caseID string) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	type reqBody struct {
+		Operator string `json:"operator,omitempty"`
+		Note     string `json:"note,omitempty"`
+	}
+	var req reqBody
+	_ = json.NewDecoder(r.Body).Decode(&req) // 允许空 body
+
+	operator := strings.TrimSpace(req.Operator)
+	if operator == "" {
+		operator = "system"
+	}
+
+	res, err := forensicexport.GenerateForensicZip(r.Context(), s.store, forensicexport.ZipOptions{
+		CaseID:           caseID,
+		DBPath:           s.opts.DBPath,
+		EvidenceRoot:     s.opts.EvidenceRoot,
+		WalletRulePath:   s.opts.WalletRulePath,
+		ExchangeRulePath: s.opts.ExchangeRulePath,
+		Operator:         operator,
+		Note:             strings.TrimSpace(req.Note),
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	info, err := s.store.GetReportByID(r.Context(), res.ReportID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":         true,
+		"case_id":    caseID,
+		"report_id":  res.ReportID,
+		"zip_path":   res.ZipPath,
+		"zip_sha256": res.ZipSHA256,
+		"warnings":   res.Warnings,
+		"report":     info,
+	})
+}
+
+func (s *Server) handleCaseExportForensicPDF(w http.ResponseWriter, r *http.Request, caseID string) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	type reqBody struct {
+		Operator string `json:"operator,omitempty"`
+		Note     string `json:"note,omitempty"`
+	}
+	var req reqBody
+	_ = json.NewDecoder(r.Body).Decode(&req) // 允许空 body
+
+	operator := strings.TrimSpace(req.Operator)
+	if operator == "" {
+		operator = "system"
+	}
+
+	res, err := forensicpdf.GenerateForensicPDF(r.Context(), s.store, forensicpdf.Options{
+		CaseID:   caseID,
+		DBPath:   s.opts.DBPath,
+		Operator: operator,
+		Note:     strings.TrimSpace(req.Note),
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	info, err := s.store.GetReportByID(r.Context(), res.ReportID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":         true,
+		"case_id":    caseID,
+		"report_id":  res.ReportID,
+		"pdf_path":   res.PDFPath,
+		"pdf_sha256": res.PDFSHA256,
+		"warnings":   res.Warnings,
+		"report":     info,
+	})
 }
 
 func (s *Server) handleCasePrechecks(w http.ResponseWriter, r *http.Request, caseID string) {

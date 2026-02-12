@@ -10,10 +10,26 @@ function formatTime(ts: number) {
 }
 
 export default function ReportGeneration() {
-  const { selectedCaseId } = useApp();
+  const { selectedCaseId, operator } = useApp();
   const [reports, setReports] = useState<ReportInfo[]>([]);
   const [selectedReportId, setSelectedReportId] = useState<string>("");
   const [content, setContent] = useState<string>("");
+  const [exportingZip, setExportingZip] = useState(false);
+  const [exportZipMsg, setExportZipMsg] = useState<string>("");
+  const [exportingPdf, setExportingPdf] = useState(false);
+  const [exportPdfMsg, setExportPdfMsg] = useState<string>("");
+
+  const loadReports = async (caseId: string) => {
+    const res = await api.listCaseReports(caseId);
+    const rows = res.reports || [];
+    setReports(rows);
+    if (rows.length > 0) {
+      setSelectedReportId(rows[0].report_id);
+    } else {
+      setSelectedReportId("");
+      setContent("");
+    }
+  };
 
   useEffect(() => {
     (async () => {
@@ -24,15 +40,7 @@ export default function ReportGeneration() {
         return;
       }
       try {
-        const res = await api.listCaseReports(selectedCaseId);
-        const rows = res.reports || [];
-        setReports(rows);
-        if (rows.length > 0) {
-          setSelectedReportId(rows[0].report_id);
-        } else {
-          setSelectedReportId("");
-          setContent("");
-        }
+        await loadReports(selectedCaseId);
       } catch {
         setReports([]);
         setSelectedReportId("");
@@ -54,7 +62,18 @@ export default function ReportGeneration() {
       }
       try {
         const res = await api.getCaseReportContent(selectedCaseId, selectedReportId);
+        const reportType = res?.report?.report_type || "";
         const raw = res.content || "";
+        if (!raw) {
+          if (res.content_available === false) {
+            setContent(
+              `(该报告为二进制产物：${reportType || "-"}，不支持内联预览。请点击“下载”获取文件。)`
+            );
+          } else {
+            setContent("");
+          }
+          return;
+        }
         // 报告目前是 internal_json，尽量格式化展示
         try {
           const parsed = JSON.parse(raw);
@@ -80,6 +99,94 @@ export default function ReportGeneration() {
 
         <div className="text-xs text-[#7a7f8a]">
           当前版本报告在采集任务结束时自动生成（internal_json）。如需重生成，请回到“数据采集”重新执行。
+        </div>
+      </div>
+
+      {/* 司法导出包 */}
+      <div className="bg-[#1e2127]/80 backdrop-blur-sm border border-[#3a3f4a] rounded p-4 mb-6 shadow-lg">
+        <h3 className="text-sm font-bold text-[#4fc3f7] mb-4">司法导出包（ZIP）</h3>
+
+        <div className="text-xs text-[#7a7f8a] mb-3">
+          生成内容：manifest.json + hashes.sha256 + evidence/（证据快照）+ reports/（报告产物）+ rules/（规则文件）。
+        </div>
+
+        <div className="flex items-center gap-3">
+          <button
+            disabled={!selectedCaseId || exportingZip}
+            onClick={async () => {
+              if (!selectedCaseId) return;
+              setExportZipMsg("");
+              setExportingZip(true);
+              try {
+                await api.generateForensicZip(selectedCaseId, {
+                  operator,
+                  note: "ui_generate_forensic_zip",
+                });
+                await loadReports(selectedCaseId);
+                setExportZipMsg("已生成（请在“历史报告”列表中下载 forensic_zip）");
+              } catch (e: any) {
+                setExportZipMsg(`ERROR: ${e?.message || String(e)}`);
+              } finally {
+                setExportingZip(false);
+              }
+            }}
+            className="bg-[#2b5278] hover:bg-[#365f8a] disabled:opacity-50 border border-[#4fc3f7] text-[#4fc3f7] px-6 py-2 text-xs rounded transition-colors"
+          >
+            [{exportingZip ? "生成中..." : "生成司法导出包（ZIP）"}]
+          </button>
+          {exportZipMsg ? (
+            <div className="text-xs text-[#b8bcc4]">
+              {exportZipMsg.startsWith("ERROR") ? (
+                <span className="text-[#ff6b6b]">{exportZipMsg}</span>
+              ) : (
+                <span className="text-green-500">{exportZipMsg}</span>
+              )}
+            </div>
+          ) : null}
+        </div>
+      </div>
+
+      {/* 取证 PDF */}
+      <div className="bg-[#1e2127]/80 backdrop-blur-sm border border-[#3a3f4a] rounded p-4 mb-6 shadow-lg">
+        <h3 className="text-sm font-bold text-[#4fc3f7] mb-4">取证 PDF 报告</h3>
+
+        <div className="text-xs text-[#7a7f8a] mb-3">
+          生成内容：案件摘要 + 设备清单 + 前置条件检查 + 命中列表 + 证据列表（Top N）。PDF 为二进制产物，生成后请在“历史报告”里下载。
+        </div>
+
+        <div className="flex items-center gap-3">
+          <button
+            disabled={!selectedCaseId || exportingPdf}
+            onClick={async () => {
+              if (!selectedCaseId) return;
+              setExportPdfMsg("");
+              setExportingPdf(true);
+              try {
+                await api.generateForensicPdf(selectedCaseId, {
+                  operator,
+                  note: "ui_generate_forensic_pdf",
+                });
+                await loadReports(selectedCaseId);
+                setExportPdfMsg("已生成（请在“历史报告”列表中下载 forensic_pdf）");
+              } catch (e: any) {
+                setExportPdfMsg(`ERROR: ${e?.message || String(e)}`);
+              } finally {
+                setExportingPdf(false);
+              }
+            }}
+            className="bg-[#2b5278] hover:bg-[#365f8a] disabled:opacity-50 border border-[#4fc3f7] text-[#4fc3f7] px-6 py-2 text-xs rounded transition-colors"
+          >
+            [{exportingPdf ? "生成中..." : "生成取证 PDF"}]
+          </button>
+          {exportPdfMsg ? (
+            <div className="text-xs text-[#b8bcc4]">
+              {exportPdfMsg.startsWith("ERROR") ? (
+                <span className="text-[#ff6b6b]">{exportPdfMsg}</span>
+              ) : (
+                <span className="text-green-500">{exportPdfMsg}</span>
+              )}
+            </div>
+          ) : null}
         </div>
       </div>
 
@@ -159,4 +266,3 @@ export default function ReportGeneration() {
     </div>
   );
 }
-

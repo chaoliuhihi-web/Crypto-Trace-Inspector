@@ -3,6 +3,7 @@ import type {
   CaseDevice,
   CaseOverview,
   CaseSummary,
+  ChainEVMBalancesResponse,
   MetaResponse,
   PrecheckResult,
   HitDetail,
@@ -101,6 +102,53 @@ export const api = {
     return requestJSON<ReportContentResponse>(`/api/cases/${caseId}/report${q}`);
   },
 
+  // 司法导出包（ZIP + manifest + hashes.sha256）
+  generateForensicZip: (
+    caseId: string,
+    payload?: { operator?: string; note?: string }
+  ) =>
+    requestJSON<{
+      ok: boolean;
+      case_id: string;
+      report_id: string;
+      zip_path: string;
+      zip_sha256: string;
+      warnings?: string[];
+      report: ReportInfo | null;
+    }>(`/api/cases/${caseId}/exports/forensic-zip`, {
+      method: "POST",
+      body: JSON.stringify(payload ?? {}),
+    }),
+
+  // 取证 PDF 报告（forensic_pdf）
+  generateForensicPdf: (
+    caseId: string,
+    payload?: { operator?: string; note?: string }
+  ) =>
+    requestJSON<{
+      ok: boolean;
+      case_id: string;
+      report_id: string;
+      pdf_path: string;
+      pdf_sha256: string;
+      warnings?: string[];
+      report: ReportInfo | null;
+    }>(`/api/cases/${caseId}/exports/forensic-pdf`, {
+      method: "POST",
+      body: JSON.stringify(payload ?? {}),
+    }),
+
+  // 链上余额查询（EVM 原生币余额，eth_getBalance）
+  queryEVMBalances: (payload: {
+    rpc_url?: string;
+    symbol?: string;
+    addresses: string[];
+  }) =>
+    requestJSON<ChainEVMBalancesResponse>("/api/chain/evm/balances", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
   startScanAll: (payload: {
     operator?: string;
     note?: string;
@@ -122,4 +170,3 @@ export const api = {
 
   getJob: (jobId: string) => requestJSON<ScanAllJob>(`/api/jobs/${jobId}`),
 };
-

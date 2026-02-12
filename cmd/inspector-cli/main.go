@@ -17,6 +17,8 @@ import (
 	"crypto-inspector/internal/app"
 	"crypto-inspector/internal/domain/model"
 	"crypto-inspector/internal/services/caseview"
+	"crypto-inspector/internal/services/forensicexport"
+	"crypto-inspector/internal/services/forensicpdf"
 	"crypto-inspector/internal/services/hostscan"
 	"crypto-inspector/internal/services/mobilescan"
 	"crypto-inspector/internal/services/webapp"
@@ -48,6 +50,8 @@ func run(ctx context.Context, args []string) error {
 		return runScan(ctx, args[1:])
 	case "query":
 		return runQuery(ctx, args[1:])
+	case "export":
+		return runExport(ctx, args[1:])
 	case "serve":
 		return runServe(ctx, args[1:])
 	default:
@@ -355,6 +359,141 @@ func runQuery(ctx context.Context, args []string) error {
 	}
 }
 
+// runExport 是导出命令路由：用于生成司法导出包/取证报告等产物。
+func runExport(ctx context.Context, args []string) error {
+	if len(args) == 0 {
+		printExportUsage()
+		return nil
+	}
+	switch args[0] {
+	case "forensic-zip":
+		return runExportForensicZip(ctx, args[1:])
+	case "forensic-pdf":
+		return runExportForensicPDF(ctx, args[1:])
+	default:
+		printExportUsage()
+		return fmt.Errorf("unknown export command: %s", args[0])
+	}
+}
+
+func runExportForensicZip(ctx context.Context, args []string) error {
+	cfg := app.DefaultConfig()
+
+	fs := flag.NewFlagSet("export forensic-zip", flag.ContinueOnError)
+	dbPath := fs.String("db", cfg.DBPath, "sqlite database path")
+	evidenceRoot := fs.String("evidence-dir", "data/evidence", "evidence output directory")
+	walletPath := fs.String("wallet", cfg.WalletRulePath, "wallet rule file")
+	exchangePath := fs.String("exchange", cfg.ExchangeRulePath, "exchange rule file")
+	caseID := fs.String("case-id", "", "case id (required)")
+	operator := fs.String("operator", "system", "operator id or name")
+	note := fs.String("note", "", "export note")
+	outDir := fs.String("out-dir", "", "export output directory (optional)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if strings.TrimSpace(*caseID) == "" {
+		return fmt.Errorf("--case-id is required")
+	}
+
+	if err := os.MkdirAll(filepath.Dir(*dbPath), 0o755); err != nil {
+		return fmt.Errorf("create db directory: %w", err)
+	}
+
+	db, err := sql.Open("sqlite", *dbPath)
+	if err != nil {
+		return fmt.Errorf("open sqlite: %w", err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	if _, err := db.ExecContext(ctx, `PRAGMA busy_timeout = 5000`); err != nil {
+		return fmt.Errorf("set busy_timeout: %w", err)
+	}
+
+	migrator := sqliteadapter.NewMigrator(db)
+	if err := migrator.Up(ctx); err != nil {
+		return fmt.Errorf("apply migrations: %w", err)
+	}
+
+	store := sqliteadapter.NewStore(db)
+	res, err := forensicexport.GenerateForensicZip(ctx, store, forensicexport.ZipOptions{
+		CaseID:           strings.TrimSpace(*caseID),
+		DBPath:           *dbPath,
+		EvidenceRoot:     *evidenceRoot,
+		WalletRulePath:   *walletPath,
+		ExchangeRulePath: *exchangePath,
+		Operator:         strings.TrimSpace(*operator),
+		Note:             strings.TrimSpace(*note),
+		ExportDir:        strings.TrimSpace(*outDir),
+	})
+	if err != nil {
+		return err
+	}
+
+	fmt.Println("forensic zip export completed")
+	fmt.Printf("case_id=%s report_id=%s\n", res.CaseID, res.ReportID)
+	fmt.Printf("zip=%s\n", res.ZipPath)
+	fmt.Printf("zip_sha256=%s\n", res.ZipSHA256)
+	if len(res.Warnings) > 0 {
+		fmt.Printf("warnings=%s\n", strings.Join(res.Warnings, " | "))
+	}
+	return nil
+}
+
+func runExportForensicPDF(ctx context.Context, args []string) error {
+	cfg := app.DefaultConfig()
+
+	fs := flag.NewFlagSet("export forensic-pdf", flag.ContinueOnError)
+	dbPath := fs.String("db", cfg.DBPath, "sqlite database path")
+	caseID := fs.String("case-id", "", "case id (required)")
+	operator := fs.String("operator", "system", "operator id or name")
+	note := fs.String("note", "", "export note")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if strings.TrimSpace(*caseID) == "" {
+		return fmt.Errorf("--case-id is required")
+	}
+
+	if err := os.MkdirAll(filepath.Dir(*dbPath), 0o755); err != nil {
+		return fmt.Errorf("create db directory: %w", err)
+	}
+
+	db, err := sql.Open("sqlite", *dbPath)
+	if err != nil {
+		return fmt.Errorf("open sqlite: %w", err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	if _, err := db.ExecContext(ctx, `PRAGMA busy_timeout = 5000`); err != nil {
+		return fmt.Errorf("set busy_timeout: %w", err)
+	}
+
+	migrator := sqliteadapter.NewMigrator(db)
+	if err := migrator.Up(ctx); err != nil {
+		return fmt.Errorf("apply migrations: %w", err)
+	}
+
+	store := sqliteadapter.NewStore(db)
+	res, err := forensicpdf.GenerateForensicPDF(ctx, store, forensicpdf.Options{
+		CaseID:   strings.TrimSpace(*caseID),
+		DBPath:   *dbPath,
+		Operator: strings.TrimSpace(*operator),
+		Note:     strings.TrimSpace(*note),
+	})
+	if err != nil {
+		return err
+	}
+
+	fmt.Println("forensic pdf export completed")
+	fmt.Printf("case_id=%s report_id=%s\n", strings.TrimSpace(*caseID), res.ReportID)
+	fmt.Printf("pdf=%s\n", res.PDFPath)
+	fmt.Printf("pdf_sha256=%s\n", res.PDFSHA256)
+	if len(res.Warnings) > 0 {
+		fmt.Printf("warnings=%s\n", strings.Join(res.Warnings, " | "))
+	}
+	return nil
+}
+
 // runServe 启动内置 Web UI + API，便于“安装即用”的内测体验。
 func runServe(ctx context.Context, args []string) error {
 	cfg := app.DefaultConfig()
@@ -524,6 +663,8 @@ func printUsage() {
 	fmt.Println("  inspector-cli scan all [--db data/inspector.db] [--evidence-dir data/evidence] [--profile internal|external] [--privacy-mode off|masked]")
 	fmt.Println("  inspector-cli query host-hits --case-id CASE_ID [--hit-type wallet_installed|exchange_visited]")
 	fmt.Println("  inspector-cli query report --case-id CASE_ID [--report-id REPORT_ID]")
+	fmt.Println("  inspector-cli export forensic-zip --case-id CASE_ID [--db data/inspector.db] [--evidence-dir data/evidence]")
+	fmt.Println("  inspector-cli export forensic-pdf --case-id CASE_ID [--db data/inspector.db]")
 	fmt.Println("  inspector-cli serve [--listen 127.0.0.1:8787] [--db data/inspector.db]")
 }
 
@@ -546,6 +687,12 @@ func printQueryUsage() {
 	fmt.Println("Usage:")
 	fmt.Println("  inspector-cli query host-hits --case-id id [--db path] [--hit-type type] [--json=true]")
 	fmt.Println("  inspector-cli query report --case-id id [--report-id id] [--db path] [--content=true] [--json=true]")
+}
+
+func printExportUsage() {
+	fmt.Println("Usage:")
+	fmt.Println("  inspector-cli export forensic-zip --case-id CASE_ID [--db path] [--evidence-dir path] [--wallet path] [--exchange path] [--out-dir path]")
+	fmt.Println("  inspector-cli export forensic-pdf --case-id CASE_ID [--db path] [--operator name] [--note text]")
 }
 
 func printJSON(v any) error {
