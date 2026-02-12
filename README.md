@@ -98,4 +98,14 @@ go run ./cmd/inspector-cli query report \
 ./scripts/package_bundle.sh
 ```
 
+## Native Installers (macOS/Windows)
+
+- macOS (DMG/PKG):
+
+```bash
+VERSION=0.1.0 bash scripts/package_macos_installer.sh
+```
+
+- Windows (EXE installer via Inno Setup): see `installer/windows/crypto-trace-inspector.iss`.
+
 See: `docs/体验部署.md`.

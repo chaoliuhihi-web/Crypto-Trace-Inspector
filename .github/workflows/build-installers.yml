@@ -1,0 +1,89 @@
+name: build-installers
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.x"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: "docs/产品前端规划/数字货币痕迹检测系统/package-lock.json"
+
+      - name: Build macOS installers (DMG/PKG)
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "VERSION=$VERSION"
+          VERSION="$VERSION" bash scripts/package_macos_installer.sh
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-installers
+          path: |
+            dist/installers/macos/*.dmg
+            dist/installers/macos/*.pkg
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.x"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: "docs/产品前端规划/数字货币痕迹检测系统/package-lock.json"
+
+      - name: Build Windows bundle (exe + rules)
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "VERSION=$VERSION"
+          VERSION="$VERSION" bash scripts/package_bundle.sh
+
+      - name: Install Inno Setup
+        shell: powershell
+        run: |
+          choco install innosetup -y
+
+      - name: Build Windows installer (Inno Setup)
+        shell: powershell
+        run: |
+          $version = "${env:GITHUB_REF_NAME}" -replace '^v',''
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { throw "ISCC not found: $iscc" }
+          & $iscc "/DMyAppVersion=$version" "installer\windows\crypto-trace-inspector.iss"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: |
+            dist/installers/windows/*.exe
+
