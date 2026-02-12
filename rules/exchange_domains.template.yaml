@@ -1,0 +1,170 @@
+version: "2026-02-12"
+bundle_type: "exchange_domains"
+maintainer: "security-team"
+description: "交易所访问识别规则模板。用于浏览器历史、DNS缓存、网络日志匹配。"
+
+meta:
+  match_modes:
+    - "exact_domain"
+    - "root_domain"
+    - "url_contains"
+  confidence_defaults:
+    exact_domain: 0.95
+    root_domain: 0.90
+    url_contains: 0.70
+
+exchanges:
+  - id: "binance"
+    enabled: true
+    name: "Binance"
+    aliases: ["币安"]
+    domains:
+      - "binance.com"
+      - "www.binance.com"
+      - "accounts.binance.com"
+      - "api.binance.com"
+    urls_contains:
+      - "binance.com"
+    confidence:
+      exact_domain: 0.95
+      root_domain: 0.90
+
+  - id: "okx"
+    enabled: true
+    name: "OKX"
+    aliases: ["欧易"]
+    domains:
+      - "okx.com"
+      - "www.okx.com"
+      - "my.okx.com"
+      - "app.okx.com"
+    urls_contains:
+      - "okx.com"
+    confidence:
+      exact_domain: 0.95
+      root_domain: 0.90
+
+  - id: "htx"
+    enabled: true
+    name: "HTX/Huobi"
+    aliases: ["火币", "Huobi"]
+    domains:
+      - "htx.com"
+      - "www.htx.com"
+      - "huobi.com"
+      - "www.huobi.com"
+    urls_contains:
+      - "htx.com"
+      - "huobi.com"
+    confidence:
+      exact_domain: 0.95
+      root_domain: 0.90
+
+  - id: "coinbase"
+    enabled: true
+    name: "Coinbase"
+    aliases: []
+    domains:
+      - "coinbase.com"
+      - "www.coinbase.com"
+      - "pro.coinbase.com"
+      - "exchange.coinbase.com"
+    urls_contains:
+      - "coinbase.com"
+    confidence:
+      exact_domain: 0.95
+      root_domain: 0.90
+
+  - id: "kraken"
+    enabled: true
+    name: "Kraken"
+    aliases: []
+    domains:
+      - "kraken.com"
+      - "www.kraken.com"
+      - "pro.kraken.com"
+    urls_contains:
+      - "kraken.com"
+    confidence:
+      exact_domain: 0.95
+      root_domain: 0.90
+
+  - id: "bybit"
+    enabled: true
+    name: "Bybit"
+    aliases: []
+    domains:
+      - "bybit.com"
+      - "www.bybit.com"
+    urls_contains:
+      - "bybit.com"
+    confidence:
+      exact_domain: 0.95
+      root_domain: 0.90
+
+  - id: "bitget"
+    enabled: true
+    name: "Bitget"
+    aliases: []
+    domains:
+      - "bitget.com"
+      - "www.bitget.com"
+    urls_contains:
+      - "bitget.com"
+    confidence:
+      exact_domain: 0.95
+      root_domain: 0.90
+
+  - id: "kucoin"
+    enabled: true
+    name: "KuCoin"
+    aliases: []
+    domains:
+      - "kucoin.com"
+      - "www.kucoin.com"
+    urls_contains:
+      - "kucoin.com"
+    confidence:
+      exact_domain: 0.95
+      root_domain: 0.90
+
+  - id: "gateio"
+    enabled: true
+    name: "Gate.io"
+    aliases: []
+    domains:
+      - "gate.io"
+      - "www.gate.io"
+    urls_contains:
+      - "gate.io"
+    confidence:
+      exact_domain: 0.95
+      root_domain: 0.90
+
+  - id: "mexc"
+    enabled: true
+    name: "MEXC"
+    aliases: []
+    domains:
+      - "mexc.com"
+      - "www.mexc.com"
+    urls_contains:
+      - "mexc.com"
+    confidence:
+      exact_domain: 0.95
+      root_domain: 0.90
+
+normalization:
+  lowercase: true
+  strip_port: true
+  strip_scheme: true
+  strip_www_prefix: true
+  punycode_to_unicode: false
+
+qa:
+  required_fields:
+    - "id"
+    - "name"
+    - "enabled"
+    - "domains"
+  rule_id_pattern: "^[a-z0-9_]+$"

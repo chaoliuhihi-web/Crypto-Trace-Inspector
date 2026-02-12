@@ -1,0 +1,249 @@
+version: "2026-02-12"
+bundle_type: "wallet_signatures"
+maintainer: "security-team"
+description: "钱包识别规则模板。支持桌面程序、浏览器扩展、Android/iOS 包名。"
+
+meta:
+  confidence_defaults:
+    direct_match: 0.95
+    keyword_match: 0.70
+    weak_hint: 0.45
+  notes:
+    - "direct_match: 包名、扩展ID、固定安装路径命中"
+    - "keyword_match: 程序名/文件名关键词命中"
+    - "weak_hint: 仅缓存痕迹或残留日志命中"
+
+wallets:
+  - id: "wallet_metamask"
+    enabled: true
+    name: "MetaMask"
+    aliases: ["MetaMask", "小狐狸"]
+    categories: ["browser_extension", "mobile_wallet"]
+    desktop:
+      app_keywords:
+        - "metamask"
+      file_keywords:
+        - "metamask"
+      install_paths_windows:
+        - "%LOCALAPPDATA%/Google/Chrome/User Data/*/Extensions/nkbihfbeogaeaoehlefnkodbefgpgknn"
+        - "%LOCALAPPDATA%/Microsoft/Edge/User Data/*/Extensions/nkbihfbeogaeaoehlefnkodbefgpgknn"
+      install_paths_macos:
+        - "~/Library/Application Support/Google/Chrome/*/Extensions/nkbihfbeogaeaoehlefnkodbefgpgknn"
+        - "~/Library/Application Support/Microsoft Edge/*/Extensions/nkbihfbeogaeaoehlefnkodbefgpgknn"
+    browser_extensions:
+      chrome_ids: ["nkbihfbeogaeaoehlefnkodbefgpgknn"]
+      edge_ids: ["nkbihfbeogaeaoehlefnkodbefgpgknn"]
+      firefox_ids: []
+    mobile:
+      android_packages: ["io.metamask", "io.metamask.app"]
+      ios_bundle_ids: ["io.metamask"]
+    confidence:
+      direct_match: 0.95
+      keyword_match: 0.70
+
+  - id: "wallet_imtoken"
+    enabled: true
+    name: "imToken"
+    aliases: ["imToken", "imtoken"]
+    categories: ["mobile_wallet"]
+    desktop:
+      app_keywords: ["imtoken"]
+      file_keywords: ["imtoken"]
+      install_paths_windows: []
+      install_paths_macos: []
+    browser_extensions:
+      chrome_ids: []
+      edge_ids: []
+      firefox_ids: []
+    mobile:
+      android_packages: ["im.token.app"]
+      ios_bundle_ids: ["im.token.app"]
+    confidence:
+      direct_match: 0.95
+      keyword_match: 0.65
+
+  - id: "wallet_trustwallet"
+    enabled: true
+    name: "Trust Wallet"
+    aliases: ["Trust Wallet", "trustwallet"]
+    categories: ["mobile_wallet"]
+    desktop:
+      app_keywords: ["trust wallet", "trustwallet"]
+      file_keywords: ["trustwallet"]
+      install_paths_windows: []
+      install_paths_macos: []
+    browser_extensions:
+      chrome_ids: []
+      edge_ids: []
+      firefox_ids: []
+    mobile:
+      android_packages: ["com.wallet.crypto.trustapp"]
+      ios_bundle_ids: ["com.sixdays.trust", "com.wallet.crypto.trustapp"]
+    confidence:
+      direct_match: 0.95
+      keyword_match: 0.65
+
+  - id: "wallet_tokenpocket"
+    enabled: true
+    name: "TokenPocket"
+    aliases: ["TokenPocket", "TP钱包"]
+    categories: ["mobile_wallet"]
+    desktop:
+      app_keywords: ["tokenpocket", "tp wallet"]
+      file_keywords: ["tokenpocket"]
+      install_paths_windows: []
+      install_paths_macos: []
+    browser_extensions:
+      chrome_ids: []
+      edge_ids: []
+      firefox_ids: []
+    mobile:
+      android_packages: ["vip.mytokenpocket"]
+      ios_bundle_ids: ["com.tokenpocket.app"]
+    confidence:
+      direct_match: 0.95
+      keyword_match: 0.60
+
+  - id: "wallet_okx"
+    enabled: true
+    name: "OKX Wallet"
+    aliases: ["OKX Wallet", "OKX Web3"]
+    categories: ["browser_extension", "mobile_wallet"]
+    desktop:
+      app_keywords: ["okx wallet", "okx web3"]
+      file_keywords: ["okxwallet"]
+      install_paths_windows: []
+      install_paths_macos: []
+    browser_extensions:
+      chrome_ids: []
+      edge_ids: []
+      firefox_ids: []
+    mobile:
+      android_packages: []
+      ios_bundle_ids: []
+    confidence:
+      direct_match: 0.90
+      keyword_match: 0.60
+
+  - id: "wallet_binance"
+    enabled: true
+    name: "Binance Web3 Wallet"
+    aliases: ["Binance Wallet", "币安钱包"]
+    categories: ["exchange_wallet"]
+    desktop:
+      app_keywords: ["binance wallet", "web3 wallet"]
+      file_keywords: ["binancewallet"]
+      install_paths_windows: []
+      install_paths_macos: []
+    browser_extensions:
+      chrome_ids: []
+      edge_ids: []
+      firefox_ids: []
+    mobile:
+      android_packages: ["com.binance.dev"]
+      ios_bundle_ids: []
+    confidence:
+      direct_match: 0.85
+      keyword_match: 0.55
+
+  - id: "wallet_exodus"
+    enabled: true
+    name: "Exodus"
+    aliases: ["Exodus", "Exodus Wallet"]
+    categories: ["desktop_wallet", "mobile_wallet"]
+    desktop:
+      app_keywords: ["exodus"]
+      file_keywords: ["exodus"]
+      install_paths_windows:
+        - "%LOCALAPPDATA%/exodus"
+      install_paths_macos:
+        - "/Applications/Exodus.app"
+        - "~/Library/Application Support/Exodus"
+    browser_extensions:
+      chrome_ids: []
+      edge_ids: []
+      firefox_ids: []
+    mobile:
+      android_packages: ["exodusmovement.exodus"]
+      ios_bundle_ids: ["exodusmovement.exodus"]
+    confidence:
+      direct_match: 0.95
+      keyword_match: 0.70
+
+  - id: "wallet_electrum"
+    enabled: true
+    name: "Electrum"
+    aliases: ["Electrum"]
+    categories: ["desktop_wallet"]
+    desktop:
+      app_keywords: ["electrum"]
+      file_keywords: ["electrum"]
+      install_paths_windows:
+        - "%APPDATA%/Electrum"
+      install_paths_macos:
+        - "/Applications/Electrum.app"
+        - "~/Library/Application Support/Electrum"
+    browser_extensions:
+      chrome_ids: []
+      edge_ids: []
+      firefox_ids: []
+    mobile:
+      android_packages: ["org.electrum.electrum"]
+      ios_bundle_ids: []
+    confidence:
+      direct_match: 0.95
+      keyword_match: 0.70
+
+  - id: "wallet_phantom"
+    enabled: true
+    name: "Phantom"
+    aliases: ["Phantom Wallet"]
+    categories: ["browser_extension", "mobile_wallet"]
+    desktop:
+      app_keywords: ["phantom"]
+      file_keywords: ["phantom"]
+      install_paths_windows: []
+      install_paths_macos: []
+    browser_extensions:
+      chrome_ids: ["bfnaelmomeimhlpmgjnjophhpkkoljpa"]
+      edge_ids: ["bfnaelmomeimhlpmgjnjophhpkkoljpa"]
+      firefox_ids: []
+    mobile:
+      android_packages: ["app.phantom"]
+      ios_bundle_ids: ["app.phantom"]
+    confidence:
+      direct_match: 0.95
+      keyword_match: 0.70
+
+  - id: "wallet_coinbase"
+    enabled: true
+    name: "Coinbase Wallet"
+    aliases: ["Coinbase Wallet"]
+    categories: ["mobile_wallet", "browser_extension"]
+    desktop:
+      app_keywords: ["coinbase wallet"]
+      file_keywords: ["coinbasewallet"]
+      install_paths_windows: []
+      install_paths_macos: []
+    browser_extensions:
+      chrome_ids: ["hnfanknocfeofbddgcijnmhnfnkdnaad"]
+      edge_ids: ["hnfanknocfeofbddgcijnmhnfnkdnaad"]
+      firefox_ids: []
+    mobile:
+      android_packages: ["org.toshi"]
+      ios_bundle_ids: ["org.toshi.distribution"]
+    confidence:
+      direct_match: 0.95
+      keyword_match: 0.65
+
+normalization:
+  lowercase: true
+  trim_spaces: true
+  domain_strip_www: true
+
+qa:
+  required_fields:
+    - "id"
+    - "name"
+    - "enabled"
+  rule_id_pattern: "^wallet_[a-z0-9_]+$"

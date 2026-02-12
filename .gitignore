@@ -1,0 +1,23 @@
+# Build outputs
+bin/
+dist/
+
+# Node build outputs
+node_modules/
+**/node_modules/
+**/dist/
+
+# Runtime data
+data/
+*.db
+*.sqlite
+*.sqlite3
+
+# Local artifacts
+output/
+
+# OS files
+.DS_Store
+
+# Local requirement docs (可能包含敏感信息，不建议提交到远端)
+功能需求.pdf

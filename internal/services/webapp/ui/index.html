@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Crypto Inspector</title>
+    <link rel="stylesheet" href="/assets/styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand__name">Crypto Inspector</div>
+          <div class="brand__sub">Internal Trial Console</div>
+        </div>
+        <div class="topbar__actions">
+          <button id="btnRefresh" class="btn btn--ghost" type="button">刷新</button>
+          <button id="btnScanAll" class="btn btn--primary" type="button">一键扫描</button>
+        </div>
+      </header>
+
+      <main class="main">
+        <aside class="sidebar">
+          <div class="sidebar__title">案件</div>
+          <div class="sidebar__tools">
+            <input id="caseSearch" class="input" placeholder="搜索 case_id / 工单号 / 标题" />
+          </div>
+          <div id="caseList" class="case-list"></div>
+        </aside>
+
+        <section class="content">
+          <div id="emptyState" class="empty">
+            <div class="empty__title">选择一个案件</div>
+            <div class="empty__hint">或点击右上角“一键扫描”创建新案件。</div>
+          </div>
+
+          <div id="caseView" class="case-view hidden">
+            <div class="case-head">
+              <div class="case-head__title" id="caseTitle">-</div>
+              <div class="case-head__meta" id="caseMeta">-</div>
+            </div>
+
+            <div class="cards">
+              <div class="card">
+                <div class="card__k">Devices</div>
+                <div class="card__v" id="kDevices">0</div>
+              </div>
+              <div class="card">
+                <div class="card__k">Artifacts</div>
+                <div class="card__v" id="kArtifacts">0</div>
+              </div>
+              <div class="card">
+                <div class="card__k">Hits</div>
+                <div class="card__v" id="kHits">0</div>
+              </div>
+              <div class="card">
+                <div class="card__k">Reports</div>
+                <div class="card__v" id="kReports">0</div>
+              </div>
+            </div>
+
+            <div class="tabs">
+              <button class="tab tab--active" data-tab="hits" type="button">命中</button>
+              <button class="tab" data-tab="artifacts" type="button">证据</button>
+              <button class="tab" data-tab="prechecks" type="button">前置条件</button>
+              <button class="tab" data-tab="audits" type="button">审计</button>
+              <button class="tab" data-tab="reports" type="button">报告</button>
+            </div>
+
+            <div class="tabpanes">
+              <div class="pane" data-pane="hits">
+                <div class="pane__toolbar">
+                  <label class="label">
+                    类型过滤:
+                    <select id="hitType" class="select">
+                      <option value="">全部</option>
+                      <option value="wallet_installed">wallet_installed</option>
+                      <option value="exchange_visited">exchange_visited</option>
+                    </select>
+                  </label>
+                  <button id="btnLoadHits" class="btn btn--ghost" type="button">刷新命中</button>
+                </div>
+                <div id="hitsTable" class="table"></div>
+              </div>
+
+              <div class="pane hidden" data-pane="artifacts">
+                <div class="pane__toolbar">
+                  <button id="btnLoadArtifacts" class="btn btn--ghost" type="button">刷新证据</button>
+                </div>
+                <div id="artifactsTable" class="table"></div>
+              </div>
+
+              <div class="pane hidden" data-pane="prechecks">
+                <div class="pane__toolbar">
+                  <button id="btnLoadPrechecks" class="btn btn--ghost" type="button">刷新前置条件</button>
+                </div>
+                <div id="prechecksTable" class="table"></div>
+              </div>
+
+              <div class="pane hidden" data-pane="audits">
+                <div class="pane__toolbar">
+                  <button id="btnLoadAudits" class="btn btn--ghost" type="button">刷新审计</button>
+                </div>
+                <div id="auditsTable" class="table"></div>
+              </div>
+
+              <div class="pane hidden" data-pane="reports">
+                <div class="pane__toolbar">
+                  <button id="btnLoadReports" class="btn btn--ghost" type="button">刷新报告</button>
+                </div>
+                <div id="reportsTable" class="table"></div>
+                <div class="report-preview">
+                  <div class="report-preview__head">
+                    <div class="report-preview__title">最新报告内容</div>
+                    <button id="btnLoadReportContent" class="btn btn--ghost" type="button">加载内容</button>
+                  </div>
+                  <pre id="reportContent" class="code"></pre>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <div id="modalBackdrop" class="modal-backdrop hidden">
+        <div class="modal">
+          <div class="modal__title">一键扫描（Scan All）</div>
+          <div class="modal__body">
+            <div class="grid">
+              <label class="field">
+                <div class="field__k">Operator</div>
+                <input id="scanOperator" class="input" value="system" />
+              </label>
+              <label class="field">
+                <div class="field__k">Profile</div>
+                <select id="scanProfile" class="select">
+                  <option value="internal" selected>internal（best effort）</option>
+                  <option value="external">external（强制授权/设备授权）</option>
+                </select>
+              </label>
+              <label class="field">
+                <div class="field__k">Auth Order（可选）</div>
+                <input id="scanAuthOrder" class="input" placeholder="AUTH-2026-0001" />
+              </label>
+              <label class="field">
+                <div class="field__k">Auth Basis（可选）</div>
+                <input id="scanAuthBasis" class="input" placeholder="warrant-001" />
+              </label>
+              <label class="field">
+                <div class="field__k">iOS Full Backup</div>
+                <select id="scanIOSBackup" class="select">
+                  <option value="true" selected>true</option>
+                  <option value="false">false</option>
+                </select>
+              </label>
+              <label class="field">
+                <div class="field__k">Privacy Mode（预留）</div>
+                <select id="scanPrivacy" class="select">
+                  <option value="off" selected>off</option>
+                  <option value="masked">masked</option>
+                </select>
+              </label>
+              <label class="field field--full">
+                <div class="field__k">Note</div>
+                <input id="scanNote" class="input" placeholder="internal trial run" />
+              </label>
+            </div>
+            <div class="modal__hint" id="scanHint"></div>
+          </div>
+          <div class="modal__actions">
+            <button id="btnCancelScan" class="btn btn--ghost" type="button">取消</button>
+            <button id="btnConfirmScan" class="btn btn--primary" type="button">开始扫描</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script src="/assets/app.js"></script>
+  </body>
+</html>
+
