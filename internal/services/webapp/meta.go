@@ -26,7 +26,7 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ok": true,
+		"ok":   true,
 		"time": time.Now().Unix(),
 		"app": map[string]any{
 			"version":    app.Version,

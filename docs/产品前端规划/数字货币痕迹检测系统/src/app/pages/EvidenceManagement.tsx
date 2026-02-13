@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { ChevronDown, ChevronRight, Download, File } from "lucide-react";
+import { ChevronDown, ChevronRight, Download, File, ShieldCheck } from "lucide-react";
 import { api } from "../api/client";
-import type { ArtifactInfo, CaseDevice } from "../api/types";
+import type { ArtifactInfo, CaseArtifactVerifyResponse, CaseDevice } from "../api/types";
 import { useApp } from "../state/AppContext";
 
 function formatTime(ts: number) {
@@ -21,7 +21,7 @@ function formatBytes(bytes: number) {
 }
 
 export default function EvidenceManagement() {
-  const { selectedCaseId } = useApp();
+  const { selectedCaseId, operator } = useApp();
   const [devices, setDevices] = useState<CaseDevice[]>([]);
   const [artifacts, setArtifacts] = useState<ArtifactInfo[]>([]);
   const [expandedDevices, setExpandedDevices] = useState<string[]>([]);
@@ -29,6 +29,9 @@ export default function EvidenceManagement() {
   const [viewMode, setViewMode] = useState<"json" | "table">("json");
   const [content, setContent] = useState<string>("");
   const [contentLoading, setContentLoading] = useState(false);
+  const [verifyLoading, setVerifyLoading] = useState(false);
+  const [verifyRes, setVerifyRes] = useState<CaseArtifactVerifyResponse | null>(null);
+  const [verifyMsg, setVerifyMsg] = useState<string>("");
 
   useEffect(() => {
     (async () => {
@@ -124,11 +127,70 @@ export default function EvidenceManagement() {
     }
   }, [content]);
 
+  const runVerify = async () => {
+    if (!selectedCaseId) return;
+    setVerifyLoading(true);
+    setVerifyMsg("");
+    setVerifyRes(null);
+    try {
+      const res = await api.verifyCaseArtifacts(selectedCaseId, {
+        operator,
+        note: "ui_verify_artifacts_sha256",
+      });
+      setVerifyRes(res);
+      setVerifyMsg(
+        res.ok
+          ? `校验通过：total=${res.total} ok=${res.ok_count}`
+          : `校验失败：total=${res.total} ok=${res.ok_count} mismatch=${res.mismatch_count} missing=${res.missing_count}`
+      );
+    } catch (e: any) {
+      setVerifyMsg(`ERROR: ${e?.message || String(e)}`);
+    } finally {
+      setVerifyLoading(false);
+    }
+  };
+
   return (
     <div className="p-6">
-      <h2 className="text-lg font-bold mb-6 text-[#f0f0f0] border-b border-[#3a3f4a] pb-2">
-        06 证据管理
-      </h2>
+      <div className="flex items-center justify-between mb-6 border-b border-[#3a3f4a] pb-2">
+        <h2 className="text-lg font-bold text-[#f0f0f0]">06 证据管理</h2>
+        <button
+          disabled={!selectedCaseId || verifyLoading}
+          onClick={runVerify}
+          className="bg-[#1e2127] hover:bg-[#252931] disabled:opacity-50 border border-[#5a5f6a] text-[#b8bcc4] px-4 py-2 text-xs rounded transition-colors"
+        >
+          <span className="inline-flex items-center gap-1">
+            <ShieldCheck className="w-4 h-4" />
+            {verifyLoading ? "校验中..." : "一键哈希校验"}
+          </span>
+        </button>
+      </div>
+
+      {verifyMsg ? (
+        <div
+          className={`mb-6 border rounded p-3 text-xs ${
+            verifyMsg.startsWith("ERROR")
+              ? "bg-[#3d1f1f] border-[#ff6b6b] text-[#ff6b6b]"
+              : verifyRes?.ok
+                ? "bg-[#1a2f1f] border-green-500 text-green-500"
+                : "bg-[#3d2817] border-[#ffa726] text-[#ffa726]"
+          }`}
+        >
+          <div className="font-mono">{verifyMsg}</div>
+          {!verifyRes?.ok && verifyRes?.results ? (
+            <div className="mt-2 max-h-40 overflow-y-auto font-mono text-[10px] text-[#e8e8e8]">
+              {verifyRes.results
+                .filter((r) => r.status !== "ok")
+                .slice(0, 30)
+                .map((r) => (
+                  <div key={r.artifact_id}>
+                    {r.status} artifact_id={r.artifact_id} expected={r.expected_sha256} actual={r.actual_sha256 || "-"}
+                  </div>
+                ))}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
 
       <div className="grid grid-cols-2 gap-6 mb-6">
         {/* 左侧：证据分类树（按设备） */}
@@ -307,4 +369,3 @@ export default function EvidenceManagement() {
     </div>
   );
 }
-

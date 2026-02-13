@@ -21,6 +21,10 @@ function typeLabel(hitType: string) {
       return "钱包";
     case "exchange_visited":
       return "交易所";
+    case "wallet_address":
+      return "地址";
+    case "token_balance":
+      return "余额";
     default:
       return hitType || "-";
   }
@@ -43,13 +47,30 @@ function parseDetail(detail?: string): any {
   }
 }
 
+function parseAddresses(text: string): string[] {
+  return (text || "")
+    .split(/[\n\r\t ,;]+/g)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
 export default function HitAnalysis() {
-  const { selectedCaseId } = useApp();
+  const { selectedCaseId, operator } = useApp();
   const [hits, setHits] = useState<HitDetail[]>([]);
   const [devices, setDevices] = useState<CaseDevice[]>([]);
   const [selectedHitId, setSelectedHitId] = useState<string>("");
+  const [queryKind, setQueryKind] = useState<"evm_native" | "evm_erc20" | "btc">(
+    "evm_native"
+  );
   const [rpcURL, setRpcURL] = useState<string>("");
-  const [symbol, setSymbol] = useState<string>("ETH");
+  const [evmSymbol, setEvmSymbol] = useState<string>("ETH");
+  const [erc20Symbol, setErc20Symbol] = useState<string>("USDT");
+  const [erc20Contract, setErc20Contract] = useState<string>(
+    "0xdAC17F958D2ee523a2206206994597C13D831ec7"
+  );
+  const [erc20Decimals, setErc20Decimals] = useState<string>("6");
+  const [btcBaseURL, setBtcBaseURL] = useState<string>("");
+  const [btcSymbol, setBtcSymbol] = useState<string>("BTC");
   const [addrText, setAddrText] = useState<string>("");
   const [balanceOut, setBalanceOut] = useState<string>("");
   const [querying, setQuerying] = useState<boolean>(false);
@@ -341,40 +362,118 @@ export default function HitAnalysis() {
       {/* 链上余额查询 */}
       <div className="bg-[#1e2127]/80 backdrop-blur-sm border border-[#3a3f4a] rounded p-4 mt-6 shadow-lg">
         <h3 className="text-sm font-bold text-[#4fc3f7] mb-4 border-b border-[#3a3f4a] pb-2">
-          链上余额查询（EVM 原生币）
+          链上余额查询（ETH/USDT/BTC）
         </h3>
 
         <div className="text-xs text-[#7a7f8a] mb-3">
-          说明：当前仅支持 EVM 的 eth_getBalance（原生币余额）。正式环境建议配置私有 RPC。余额同时返回 WEI（精确整数）与 {symbol || "ETH"}（18 位小数格式）。
+          说明：本功能用于“快速核对地址余额”。内测阶段允许缺省使用公共数据源（不保证长期可用）。正式环境建议配置私有 RPC / 私有 BTC 节点网关。当前查询结果不会自动写入证据链（后续可扩展为：生成证据快照 + token_balance 命中）。
         </div>
 
         <div className="grid grid-cols-2 gap-6 mb-4">
           <div className="space-y-3">
             <div className="flex items-center">
-              <label className="w-24 text-[#b8bcc4] text-xs">RPC URL：</label>
-              <input
-                value={rpcURL}
-                onChange={(e) => setRpcURL(e.target.value)}
-                placeholder="可选；为空则使用默认公共 RPC"
-                className="flex-1 bg-[#252931] border border-[#3a3f4a] px-2 py-1 text-xs text-[#e8e8e8] rounded focus:outline-none focus:border-[#4fc3f7]"
-              />
+              <label className="w-24 text-[#b8bcc4] text-xs">类型：</label>
+              <select
+                value={queryKind}
+                onChange={(e) =>
+                  setQueryKind(e.target.value as "evm_native" | "evm_erc20" | "btc")
+                }
+                className="flex-1 bg-[#252931] border border-[#3a3f4a] rounded px-2 py-1 text-xs text-[#e8e8e8] focus:outline-none focus:border-[#4fc3f7]"
+              >
+                <option value="evm_native">EVM 原生币（eth_getBalance）</option>
+                <option value="evm_erc20">EVM ERC20（balanceOf）</option>
+                <option value="btc">BTC 地址余额（HTTP API）</option>
+              </select>
             </div>
+
             <div className="flex items-center">
-              <label className="w-24 text-[#b8bcc4] text-xs">Symbol：</label>
-              <input
-                value={symbol}
-                onChange={(e) => setSymbol(e.target.value)}
-                placeholder="ETH"
-                className="flex-1 bg-[#252931] border border-[#3a3f4a] px-2 py-1 text-xs text-[#e8e8e8] rounded focus:outline-none focus:border-[#4fc3f7]"
-              />
+              <label className="w-24 text-[#b8bcc4] text-xs">
+                {queryKind === "btc" ? "Base URL：" : "RPC URL："}
+              </label>
+              {queryKind === "btc" ? (
+                <input
+                  value={btcBaseURL}
+                  onChange={(e) => setBtcBaseURL(e.target.value)}
+                  placeholder="可选；为空则使用默认公共 BTC API"
+                  className="flex-1 bg-[#252931] border border-[#3a3f4a] px-2 py-1 text-xs text-[#e8e8e8] rounded focus:outline-none focus:border-[#4fc3f7]"
+                />
+              ) : (
+                <input
+                  value={rpcURL}
+                  onChange={(e) => setRpcURL(e.target.value)}
+                  placeholder="可选；为空则使用默认公共 RPC"
+                  className="flex-1 bg-[#252931] border border-[#3a3f4a] px-2 py-1 text-xs text-[#e8e8e8] rounded focus:outline-none focus:border-[#4fc3f7]"
+                />
+              )}
             </div>
+
+            {queryKind === "evm_native" ? (
+              <div className="flex items-center">
+                <label className="w-24 text-[#b8bcc4] text-xs">Symbol：</label>
+                <input
+                  value={evmSymbol}
+                  onChange={(e) => setEvmSymbol(e.target.value)}
+                  placeholder="ETH"
+                  className="flex-1 bg-[#252931] border border-[#3a3f4a] px-2 py-1 text-xs text-[#e8e8e8] rounded focus:outline-none focus:border-[#4fc3f7]"
+                />
+              </div>
+            ) : null}
+
+            {queryKind === "evm_erc20" ? (
+              <>
+                <div className="flex items-center">
+                  <label className="w-24 text-[#b8bcc4] text-xs">Token：</label>
+                  <input
+                    value={erc20Symbol}
+                    onChange={(e) => setErc20Symbol(e.target.value)}
+                    placeholder="USDT"
+                    className="flex-1 bg-[#252931] border border-[#3a3f4a] px-2 py-1 text-xs text-[#e8e8e8] rounded focus:outline-none focus:border-[#4fc3f7]"
+                  />
+                </div>
+                <div className="flex items-center">
+                  <label className="w-24 text-[#b8bcc4] text-xs">Contract：</label>
+                  <input
+                    value={erc20Contract}
+                    onChange={(e) => setErc20Contract(e.target.value)}
+                    placeholder="0x..."
+                    className="flex-1 bg-[#252931] border border-[#3a3f4a] px-2 py-1 text-xs text-[#e8e8e8] rounded focus:outline-none focus:border-[#4fc3f7] font-mono"
+                  />
+                </div>
+                <div className="flex items-center">
+                  <label className="w-24 text-[#b8bcc4] text-xs">Decimals：</label>
+                  <input
+                    value={erc20Decimals}
+                    onChange={(e) => setErc20Decimals(e.target.value)}
+                    placeholder="6"
+                    className="flex-1 bg-[#252931] border border-[#3a3f4a] px-2 py-1 text-xs text-[#e8e8e8] rounded focus:outline-none focus:border-[#4fc3f7]"
+                  />
+                </div>
+              </>
+            ) : null}
+
+            {queryKind === "btc" ? (
+              <div className="flex items-center">
+                <label className="w-24 text-[#b8bcc4] text-xs">Symbol：</label>
+                <input
+                  value={btcSymbol}
+                  onChange={(e) => setBtcSymbol(e.target.value)}
+                  placeholder="BTC"
+                  className="flex-1 bg-[#252931] border border-[#3a3f4a] px-2 py-1 text-xs text-[#e8e8e8] rounded focus:outline-none focus:border-[#4fc3f7]"
+                />
+              </div>
+            ) : null}
+
             <div className="flex items-start">
               <label className="w-24 text-[#b8bcc4] text-xs pt-1">地址列表：</label>
               <textarea
                 rows={6}
                 value={addrText}
                 onChange={(e) => setAddrText(e.target.value)}
-                placeholder={"一行一个地址，或用空格/逗号分隔\\n0x...\\n0x..."}
+                placeholder={
+                  queryKind === "btc"
+                    ? "一行一个地址，或用空格/逗号分隔\nbc1...\n1...\n3..."
+                    : "一行一个地址，或用空格/逗号分隔\n0x...\n0x..."
+                }
                 className="flex-1 bg-[#252931] border border-[#3a3f4a] px-2 py-1 text-xs text-[#e8e8e8] rounded focus:outline-none focus:border-[#4fc3f7] resize-none font-mono"
               />
             </div>
@@ -382,10 +481,7 @@ export default function HitAnalysis() {
               <button
                 disabled={querying}
                 onClick={async () => {
-                  const addrs = addrText
-                    .split(/[\n\r\t ,;]+/g)
-                    .map((s) => s.trim())
-                    .filter(Boolean);
+                  const addrs = parseAddresses(addrText);
                   if (addrs.length === 0) {
                     setBalanceOut("请输入至少 1 个地址。");
                     return;
@@ -393,11 +489,37 @@ export default function HitAnalysis() {
                   setQuerying(true);
                   setBalanceOut("");
                   try {
-                    const res = await api.queryEVMBalances({
-                      rpc_url: rpcURL.trim() || undefined,
-                      symbol: symbol.trim() || undefined,
-                      addresses: addrs,
-                    });
+                    let res: any = null;
+                    if (queryKind === "evm_native") {
+                      res = await api.queryEVMBalances({
+                        rpc_url: rpcURL.trim() || undefined,
+                        symbol: evmSymbol.trim() || undefined,
+                        addresses: addrs,
+                      });
+                    } else if (queryKind === "evm_erc20") {
+                      const decText = erc20Decimals.trim();
+                      const dec =
+                        decText === "" ? undefined : Number.parseInt(decText, 10);
+                      if (dec !== undefined) {
+                        if (!Number.isFinite(dec) || dec < 0 || dec > 36) {
+                          setBalanceOut("ERROR: decimals 请输入 0~36 的整数。");
+                          return;
+                        }
+                      }
+                      res = await api.queryEVMERC20Balances({
+                        rpc_url: rpcURL.trim() || undefined,
+                        symbol: erc20Symbol.trim() || undefined,
+                        contract: erc20Contract.trim() || undefined,
+                        decimals: dec,
+                        addresses: addrs,
+                      });
+                    } else {
+                      res = await api.queryBTCBalances({
+                        base_url: btcBaseURL.trim() || undefined,
+                        symbol: btcSymbol.trim() || undefined,
+                        addresses: addrs,
+                      });
+                    }
                     setBalanceOut(JSON.stringify(res, null, 2));
                   } catch (e: any) {
                     setBalanceOut(`ERROR: ${e?.message || String(e)}`);
@@ -409,6 +531,75 @@ export default function HitAnalysis() {
               >
                 [{querying ? "查询中..." : "查询余额"}]
               </button>
+
+              <button
+                disabled={querying || !selectedCaseId}
+                onClick={async () => {
+                  if (!selectedCaseId) {
+                    setBalanceOut("请先选择一个案件。");
+                    return;
+                  }
+                  const addrs = parseAddresses(addrText);
+                  if (addrs.length === 0) {
+                    setBalanceOut("请输入至少 1 个地址。");
+                    return;
+                  }
+
+                  setQuerying(true);
+                  setBalanceOut("");
+                  try {
+                    const decText = erc20Decimals.trim();
+                    const dec =
+                      decText === "" ? undefined : Number.parseInt(decText, 10);
+                    if (dec !== undefined) {
+                      if (!Number.isFinite(dec) || dec < 0 || dec > 36) {
+                        setBalanceOut("ERROR: decimals 请输入 0~36 的整数。");
+                        return;
+                      }
+                    }
+
+                    const res = await api.persistCaseChainBalance(selectedCaseId, {
+                      operator: (operator || "").trim() || undefined,
+                      note: "ui_persist_chain_balance",
+                      kind:
+                        queryKind === "evm_native"
+                          ? "evm_native"
+                          : queryKind === "evm_erc20"
+                            ? "evm_erc20"
+                            : "btc",
+                      rpc_url: rpcURL.trim() || undefined,
+                      symbol:
+                        queryKind === "evm_native"
+                          ? evmSymbol.trim() || undefined
+                          : queryKind === "evm_erc20"
+                            ? erc20Symbol.trim() || undefined
+                            : btcSymbol.trim() || undefined,
+                      contract: erc20Contract.trim() || undefined,
+                      decimals: queryKind === "evm_erc20" ? dec : undefined,
+                      base_url: btcBaseURL.trim() || undefined,
+                      addresses: addrs,
+                    });
+
+                    // 写入后立刻刷新命中列表（包含 token_balance）
+                    const h = await api.listCaseHits(selectedCaseId);
+                    const rows = h.hits || [];
+                    setHits(rows);
+                    if (rows.length > 0 && !selectedHitId) {
+                      setSelectedHitId(rows[0].hit_id);
+                    }
+
+                    setBalanceOut(JSON.stringify(res, null, 2));
+                  } catch (e: any) {
+                    setBalanceOut(`ERROR: ${e?.message || String(e)}`);
+                  } finally {
+                    setQuerying(false);
+                  }
+                }}
+                className="bg-[#1e2127] hover:bg-[#252931] disabled:opacity-50 border border-[#5a5f6a] text-[#b8bcc4] px-6 py-2 text-xs rounded transition-colors"
+              >
+                [查询并留痕]
+              </button>
+
               <button
                 onClick={() => setBalanceOut("")}
                 className="bg-[#1e2127] hover:bg-[#252931] border border-[#5a5f6a] text-[#b8bcc4] px-6 py-2 text-xs rounded transition-colors"

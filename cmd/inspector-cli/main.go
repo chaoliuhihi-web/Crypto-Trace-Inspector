@@ -52,6 +52,8 @@ func run(ctx context.Context, args []string) error {
 		return runQuery(ctx, args[1:])
 	case "export":
 		return runExport(ctx, args[1:])
+	case "verify":
+		return runVerify(ctx, args[1:])
 	case "serve":
 		return runServe(ctx, args[1:])
 	default:
@@ -665,6 +667,8 @@ func printUsage() {
 	fmt.Println("  inspector-cli query report --case-id CASE_ID [--report-id REPORT_ID]")
 	fmt.Println("  inspector-cli export forensic-zip --case-id CASE_ID [--db data/inspector.db] [--evidence-dir data/evidence]")
 	fmt.Println("  inspector-cli export forensic-pdf --case-id CASE_ID [--db data/inspector.db]")
+	fmt.Println("  inspector-cli verify forensic-zip --zip PATH_TO_ZIP")
+	fmt.Println("  inspector-cli verify artifacts --case-id CASE_ID [--db data/inspector.db] [--artifact-id ART_ID]")
 	fmt.Println("  inspector-cli serve [--listen 127.0.0.1:8787] [--db data/inspector.db]")
 }
 

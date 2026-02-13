@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"crypto-inspector/internal/domain/model"
+	"crypto-inspector/internal/platform/hash"
 	"crypto-inspector/internal/services/forensicexport"
 	"crypto-inspector/internal/services/forensicpdf"
 )
@@ -106,6 +107,15 @@ func (s *Server) handleCaseRoutes(w http.ResponseWriter, r *http.Request) {
 		s.handleCaseDevices(w, r, caseID)
 	case "hits":
 		s.handleCaseHits(w, r, caseID)
+	case "chain":
+		// /api/cases/{case_id}/chain/{action}
+		//
+		// - POST /api/cases/{case_id}/chain/balance
+		restParts := []string{}
+		if len(parts) > 2 {
+			restParts = parts[2:]
+		}
+		s.handleCaseChain(w, r, caseID, restParts)
 	case "reports":
 		s.handleCaseReports(w, r, caseID)
 	case "report":
@@ -121,6 +131,15 @@ func (s *Server) handleCaseRoutes(w http.ResponseWriter, r *http.Request) {
 			restParts = parts[2:]
 		}
 		s.handleCaseExports(w, r, caseID, restParts)
+	case "verify":
+		// /api/cases/{case_id}/verify/{kind}
+		//
+		// - POST /api/cases/{case_id}/verify/artifacts
+		restParts := []string{}
+		if len(parts) > 2 {
+			restParts = parts[2:]
+		}
+		s.handleCaseVerify(w, r, caseID, restParts)
 	case "prechecks":
 		s.handleCasePrechecks(w, r, caseID)
 	case "audits":
@@ -130,6 +149,143 @@ func (s *Server) handleCaseRoutes(w http.ResponseWriter, r *http.Request) {
 	default:
 		w.WriteHeader(http.StatusNotFound)
 	}
+}
+
+func (s *Server) handleCaseVerify(w http.ResponseWriter, r *http.Request, caseID string, parts []string) {
+	if len(parts) < 1 {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+	kind := strings.TrimSpace(parts[0])
+	switch kind {
+	case "artifacts":
+		s.handleCaseVerifyArtifacts(w, r, caseID)
+	default:
+		w.WriteHeader(http.StatusNotFound)
+	}
+}
+
+// handleCaseVerifyArtifacts 对案件下的证据快照进行 sha256 复核：
+// - 复算 snapshot_path 文件 sha256
+// - 对比入库 sha256/size_bytes
+// - 输出 ok/mismatch/missing/error 明细
+//
+// 该接口用于内测阶段快速发现“证据目录被清理/被改动”的情况。
+func (s *Server) handleCaseVerifyArtifacts(w http.ResponseWriter, r *http.Request, caseID string) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	type reqBody struct {
+		Operator   string `json:"operator,omitempty"`
+		ArtifactID string `json:"artifact_id,omitempty"`
+		Note       string `json:"note,omitempty"`
+	}
+	var req reqBody
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	operator := strings.TrimSpace(req.Operator)
+	if operator == "" {
+		operator = "system"
+	}
+	artifactID := strings.TrimSpace(req.ArtifactID)
+
+	type item struct {
+		ArtifactID     string `json:"artifact_id"`
+		SnapshotPath   string `json:"snapshot_path"`
+		ExpectedSHA256 string `json:"expected_sha256"`
+		ActualSHA256   string `json:"actual_sha256,omitempty"`
+		ExpectedSize   int64  `json:"expected_size_bytes"`
+		ActualSize     int64  `json:"actual_size_bytes,omitempty"`
+		Status         string `json:"status"` // ok|mismatch|missing|error
+		Error          string `json:"error,omitempty"`
+	}
+
+	// 构造校验目标
+	var targets []model.ArtifactInfo
+	if artifactID != "" {
+		info, err := s.store.GetArtifactInfo(r.Context(), artifactID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		if info == nil || strings.TrimSpace(info.ArtifactID) == "" {
+			writeError(w, http.StatusNotFound, fmt.Errorf("artifact not found: %s", artifactID))
+			return
+		}
+		if strings.TrimSpace(info.CaseID) != strings.TrimSpace(caseID) {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("artifact %s not in case %s", artifactID, caseID))
+			return
+		}
+		targets = append(targets, *info)
+	} else {
+		rows, err := s.store.ListArtifactsByCase(r.Context(), caseID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		targets = rows
+	}
+
+	out := make([]item, 0, len(targets))
+	okCount := 0
+	mismatchCount := 0
+	missingCount := 0
+	errorCount := 0
+	for _, t := range targets {
+		it := item{
+			ArtifactID:     t.ArtifactID,
+			SnapshotPath:   t.SnapshotPath,
+			ExpectedSHA256: t.SHA256,
+			ExpectedSize:   t.SizeBytes,
+		}
+
+		sum, size, err := hash.File(t.SnapshotPath)
+		if err != nil {
+			it.Status = "missing"
+			it.Error = err.Error()
+			missingCount++
+			out = append(out, it)
+			continue
+		}
+		it.ActualSHA256 = sum
+		it.ActualSize = size
+		if !strings.EqualFold(strings.TrimSpace(sum), strings.TrimSpace(t.SHA256)) || size != t.SizeBytes {
+			it.Status = "mismatch"
+			mismatchCount++
+			out = append(out, it)
+			continue
+		}
+		it.Status = "ok"
+		okCount++
+		out = append(out, it)
+	}
+
+	status := "success"
+	if mismatchCount > 0 || missingCount > 0 || errorCount > 0 {
+		status = "failed"
+	}
+	_ = s.store.AppendAudit(r.Context(), caseID, "", "verify", "artifacts_sha256", status, operator, "webapp.handleCaseVerifyArtifacts", map[string]any{
+		"note":            strings.TrimSpace(req.Note),
+		"total":           len(out),
+		"ok":              okCount,
+		"mismatch":        mismatchCount,
+		"missing":         missingCount,
+		"error":           errorCount,
+		"single_artifact": artifactID,
+	})
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":             status == "success",
+		"case_id":        caseID,
+		"total":          len(out),
+		"ok_count":       okCount,
+		"mismatch_count": mismatchCount,
+		"missing_count":  missingCount,
+		"error_count":    errorCount,
+		"results":        out,
+	})
 }
 
 func (s *Server) handleCaseDevices(w http.ResponseWriter, r *http.Request, caseID string) {

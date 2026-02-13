@@ -214,3 +214,65 @@ export type ChainEVMBalancesResponse = {
   warnings?: string[];
   addr_count: number;
 };
+
+// 链上余额查询：EVM ERC20（eth_call balanceOf）
+export type ChainEVMERC20BalancesResponse = {
+  ok: boolean;
+  chain: "evm";
+  token_type: "erc20";
+  rpc_url: string;
+  symbol: string;
+  contract: string;
+  decimals: number;
+  balances: Record<string, Record<string, string>>; // address -> { USDT_RAW, USDT, ... }
+  warnings?: string[];
+  addr_count: number;
+};
+
+// 链上余额查询：BTC（HTTP API）
+export type ChainBTCBalancesResponse = {
+  ok: boolean;
+  chain: "btc";
+  base_url: string;
+  symbol: string;
+  balances: Record<string, Record<string, string>>; // address -> { SAT, BTC }
+  warnings?: string[];
+  addr_count: number;
+};
+
+export type ArtifactVerifyItem = {
+  artifact_id: string;
+  snapshot_path: string;
+  expected_sha256: string;
+  actual_sha256?: string;
+  expected_size_bytes: number;
+  actual_size_bytes?: number;
+  status: "ok" | "mismatch" | "missing" | "error";
+  error?: string;
+};
+
+export type CaseArtifactVerifyResponse = {
+  ok: boolean;
+  case_id: string;
+  total: number;
+  ok_count: number;
+  mismatch_count: number;
+  missing_count: number;
+  error_count: number;
+  results: ArtifactVerifyItem[];
+};
+
+// 案件链上余额查询（查询并落库为证据 + token_balance 命中）
+export type CaseChainBalancePersistResponse = {
+  ok: boolean;
+  case_id: string;
+  device_id: string;
+  kind: string;
+  artifact_id: string;
+  snapshot_path: string;
+  sha256: string;
+  size_bytes: number;
+  balances: Record<string, Record<string, string>>;
+  hit_ids: string[];
+  warnings?: string[];
+};

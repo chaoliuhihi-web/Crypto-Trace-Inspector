@@ -14,6 +14,7 @@ export default function ReportGeneration() {
   const [reports, setReports] = useState<ReportInfo[]>([]);
   const [selectedReportId, setSelectedReportId] = useState<string>("");
   const [content, setContent] = useState<string>("");
+  const [contentType, setContentType] = useState<"text" | "html">("text");
   const [exportingZip, setExportingZip] = useState(false);
   const [exportZipMsg, setExportZipMsg] = useState<string>("");
   const [exportingPdf, setExportingPdf] = useState(false);
@@ -66,15 +67,23 @@ export default function ReportGeneration() {
         const raw = res.content || "";
         if (!raw) {
           if (res.content_available === false) {
+            setContentType("text");
             setContent(
               `(该报告为二进制产物：${reportType || "-"}，不支持内联预览。请点击“下载”获取文件。)`
             );
           } else {
+            setContentType("text");
             setContent("");
           }
           return;
         }
-        // 报告目前是 internal_json，尽量格式化展示
+        if (reportType === "internal_html") {
+          setContentType("html");
+          setContent(raw);
+          return;
+        }
+        setContentType("text");
+        // internal_json：尽量格式化展示（其他文本类型则原样输出）
         try {
           const parsed = JSON.parse(raw);
           setContent(JSON.stringify(parsed, null, 2));
@@ -82,6 +91,7 @@ export default function ReportGeneration() {
           setContent(raw);
         }
       } catch (e: any) {
+        setContentType("text");
         setContent(`ERROR: ${e?.message || String(e)}`);
       }
     })();
@@ -98,7 +108,7 @@ export default function ReportGeneration() {
         <h3 className="text-sm font-bold text-[#4fc3f7] mb-4">报告生成</h3>
 
         <div className="text-xs text-[#7a7f8a]">
-          当前版本报告在采集任务结束时自动生成（internal_json）。如需重生成，请回到“数据采集”重新执行。
+          当前版本报告在采集任务结束时自动生成（internal_json + internal_html）。如需重生成，请回到“数据采集”重新执行。
         </div>
       </div>
 
@@ -257,11 +267,23 @@ export default function ReportGeneration() {
           </div>
         </div>
 
-        <div className="bg-[#0d0f12] border border-[#3a3f4a] rounded p-3 overflow-x-auto max-h-96">
-          <pre className="text-[10px] text-[#e8e8e8] font-mono leading-relaxed">
-            {content || "(empty)"}
-          </pre>
-        </div>
+        {contentType === "html" ? (
+          <div className="bg-[#0d0f12] border border-[#3a3f4a] rounded overflow-hidden">
+            <iframe
+              title="internal_html_preview"
+              className="w-full h-96 bg-white"
+              // sandbox 为空表示使用最严格限制：禁用脚本/表单/同源等
+              sandbox=""
+              srcDoc={content || ""}
+            />
+          </div>
+        ) : (
+          <div className="bg-[#0d0f12] border border-[#3a3f4a] rounded p-3 overflow-x-auto max-h-96">
+            <pre className="text-[10px] text-[#e8e8e8] font-mono leading-relaxed">
+              {content || "(empty)"}
+            </pre>
+          </div>
+        )}
       </div>
     </div>
   );

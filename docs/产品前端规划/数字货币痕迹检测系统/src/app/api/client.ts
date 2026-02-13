@@ -3,7 +3,10 @@ import type {
   CaseDevice,
   CaseOverview,
   CaseSummary,
+  ChainBTCBalancesResponse,
   ChainEVMBalancesResponse,
+  ChainEVMERC20BalancesResponse,
+  CaseArtifactVerifyResponse,
   MetaResponse,
   PrecheckResult,
   HitDetail,
@@ -12,6 +15,7 @@ import type {
   ReportContentResponse,
   ReportInfo,
   ScanAllJob,
+  CaseChainBalancePersistResponse,
 } from "./types";
 
 type ApiErrorBody = { error?: string };
@@ -148,6 +152,66 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+
+  // 链上余额查询（EVM ERC20，eth_call balanceOf）
+  queryEVMERC20Balances: (payload: {
+    rpc_url?: string;
+    symbol?: string;
+    contract?: string;
+    decimals?: number;
+    addresses: string[];
+  }) =>
+    requestJSON<ChainEVMERC20BalancesResponse>("/api/chain/evm/erc20/balances", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  // 链上余额查询（BTC，HTTP API）
+  queryBTCBalances: (payload: {
+    base_url?: string;
+    symbol?: string;
+    addresses: string[];
+  }) =>
+    requestJSON<ChainBTCBalancesResponse>("/api/chain/btc/balances", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  // 案件链上余额查询（查询并落库为证据 + token_balance 命中）
+  persistCaseChainBalance: (
+    caseId: string,
+    payload: {
+      operator?: string;
+      note?: string;
+      kind?: "evm_native" | "evm_erc20" | "btc";
+      rpc_url?: string;
+      symbol?: string;
+      contract?: string;
+      decimals?: number;
+      base_url?: string;
+      addresses: string[];
+    }
+  ) =>
+    requestJSON<CaseChainBalancePersistResponse>(
+      `/api/cases/${caseId}/chain/balance`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }
+    ),
+
+  // 证据快照 sha256 复核（对比入库 sha256/size_bytes）
+  verifyCaseArtifacts: (
+    caseId: string,
+    payload?: { operator?: string; artifact_id?: string; note?: string }
+  ) =>
+    requestJSON<CaseArtifactVerifyResponse>(
+      `/api/cases/${caseId}/verify/artifacts`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload ?? {}),
+      }
+    ),
 
   startScanAll: (payload: {
     operator?: string;

@@ -36,6 +36,8 @@ const (
 	ArtifactMobilePackages ArtifactType = "mobile_packages"
 	// ArtifactMobileBackup 移动端备份元数据证据（骨架阶段）。
 	ArtifactMobileBackup ArtifactType = "mobile_backup"
+	// ArtifactChainBalance 链上余额查询结果快照（用于把“链上查询结果”固化进证据链）。
+	ArtifactChainBalance ArtifactType = "chain_balance"
 )
 
 // Artifact 表示一条落库证据（对应 artifacts 表）。
@@ -67,6 +69,10 @@ const (
 	HitWalletInstalled HitType = "wallet_installed"
 	// HitExchangeVisited 命中交易所访问记录。
 	HitExchangeVisited HitType = "exchange_visited"
+	// HitWalletAddress 从证据中抽取到的钱包地址（例如 0x... / bc1...）。
+	HitWalletAddress HitType = "wallet_address"
+	// HitTokenBalance 链上余额查询结果（例如 ETH/USDT/BTC 的数量）。
+	HitTokenBalance HitType = "token_balance"
 )
 
 // RuleHit 表示一次规则命中结果（对应 rule_hits 表）。
@@ -77,6 +83,7 @@ type RuleHit struct {
 	Type         HitType  // 命中类型
 	RuleID       string   // 命中的规则 ID
 	RuleName     string   // 命中的规则名称
+	RuleBundleID string   // 规则包 ID（rule_bundles.bundle_id）；非规则命中可为空
 	RuleVersion  string   // 规则版本
 	MatchedValue string   // 触发命中的值（域名/扩展ID/应用名）
 	FirstSeenAt  int64    // 最早命中时间

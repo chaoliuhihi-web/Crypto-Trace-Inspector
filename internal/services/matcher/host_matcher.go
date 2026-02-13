@@ -3,6 +3,7 @@ package matcher
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -31,6 +32,7 @@ func MatchHostArtifacts(loaded *rules.LoadedRules, artifacts []model.Artifact) (
 
 	matchWallets(loaded, apps, extensions, artifacts, agg)
 	matchExchanges(loaded, visits, artifacts, agg)
+	matchWalletAddresses(visits, artifacts, agg)
 
 	hits := make([]model.RuleHit, 0, len(agg))
 	for _, a := range agg {
@@ -46,6 +48,182 @@ func MatchHostArtifacts(loaded *rules.LoadedRules, artifacts []model.Artifact) (
 	})
 
 	return &HostMatchResult{Hits: hits}, nil
+}
+
+var (
+	reEVMAddress = regexp.MustCompile(`(?i)0x[0-9a-f]{40}`)
+	// bech32: bc1q... / bc1p...（长度保守一些，避免误报）
+	reBTCBech32 = regexp.MustCompile(`(?i)bc1[ac-hj-np-z02-9]{25,87}`)
+	// base58: 1... / 3...（不含 0,O,I,l）
+	reBTCBase58 = regexp.MustCompile(`[13][1-9A-HJ-NP-Za-km-z]{25,34}`)
+)
+
+// matchWalletAddresses 从浏览历史中抽取“疑似钱包地址”并固化为命中。
+//
+// 说明：
+// - 这里不是“规则库命中”，而是基于正则的地址抽取（内测阶段用于提高线索覆盖）。
+// - 抽取到地址 ≠ 证明地址归属，只表示在设备浏览痕迹中出现过该地址（需要人工复核上下文）。
+func matchWalletAddresses(visits []model.VisitRecord, artifacts []model.Artifact, agg map[string]*hitAccumulator) {
+	if len(visits) == 0 {
+		return
+	}
+	artifactIDs := artifactIDsByType(artifacts, map[model.ArtifactType]struct{}{
+		model.ArtifactBrowserHistory: {},
+	})
+	now := time.Now().Unix()
+
+	for _, v := range visits {
+		first := v.VisitedAt
+		if first <= 0 {
+			first = now
+		}
+
+		sources := []struct {
+			Field string
+			Text  string
+		}{
+			{Field: "url", Text: v.URL},
+			{Field: "title", Text: v.Title},
+		}
+		for _, src := range sources {
+			text := src.Text
+			if strings.TrimSpace(text) == "" {
+				continue
+			}
+
+			// EVM 0x... 地址
+			for _, m := range reEVMAddress.FindAllString(text, -1) {
+				addr := strings.ToLower(strings.TrimSpace(m))
+				ruleID := "address_regex_evm"
+				addOrUpdateHit(agg, hitKey(string(model.HitWalletAddress), firstDeviceID(artifacts), ruleID, addr), model.RuleHit{
+					ID:           id.New("hit"),
+					CaseID:       firstCaseID(artifacts),
+					DeviceID:     firstDeviceID(artifacts),
+					Type:         model.HitWalletAddress,
+					RuleID:       ruleID,
+					RuleName:     "钱包地址抽取(EVM)",
+					RuleVersion:  "builtin-0.1.0",
+					MatchedValue: addr,
+					FirstSeenAt:  first,
+					LastSeenAt:   first,
+					Confidence:   0.80,
+					Verdict:      "suspected",
+					DetailJSON: mustJSON(map[string]any{
+						"chain":       "evm",
+						"match_field": src.Field,
+						"browser":     v.Browser,
+						"profile":     v.Profile,
+						"visited_at":  v.VisitedAt,
+						"sample":      truncateText(text, 240),
+					}),
+					ArtifactIDs: artifactIDs,
+				})
+			}
+
+			// BTC bech32
+			for _, m := range reBTCBech32.FindAllString(text, -1) {
+				addr := strings.ToLower(strings.TrimSpace(m))
+				ruleID := "address_regex_btc_bech32"
+				addOrUpdateHit(agg, hitKey(string(model.HitWalletAddress), firstDeviceID(artifacts), ruleID, addr), model.RuleHit{
+					ID:           id.New("hit"),
+					CaseID:       firstCaseID(artifacts),
+					DeviceID:     firstDeviceID(artifacts),
+					Type:         model.HitWalletAddress,
+					RuleID:       ruleID,
+					RuleName:     "钱包地址抽取(BTC bech32)",
+					RuleVersion:  "builtin-0.1.0",
+					MatchedValue: addr,
+					FirstSeenAt:  first,
+					LastSeenAt:   first,
+					Confidence:   0.85,
+					Verdict:      "suspected",
+					DetailJSON: mustJSON(map[string]any{
+						"chain":       "btc",
+						"format":      "bech32",
+						"match_field": src.Field,
+						"browser":     v.Browser,
+						"profile":     v.Profile,
+						"visited_at":  v.VisitedAt,
+						"sample":      truncateText(text, 240),
+					}),
+					ArtifactIDs: artifactIDs,
+				})
+			}
+
+			// BTC base58
+			for _, pos := range reBTCBase58.FindAllStringIndex(text, -1) {
+				if len(pos) != 2 {
+					continue
+				}
+				start, end := pos[0], pos[1]
+				if start < 0 || end < 0 || start >= end || end > len(text) {
+					continue
+				}
+				// 防止把 bech32（bc1...）内部的 "1..." 误识别为 base58 地址：
+				// - base58 地址前后不应再紧贴 base58 字符，否则更像是“更长字符串的一部分”。
+				if start > 0 && isBTCBase58Char(text[start-1]) {
+					continue
+				}
+				if end < len(text) && isBTCBase58Char(text[end]) {
+					continue
+				}
+
+				addr := strings.TrimSpace(text[start:end])
+				ruleID := "address_regex_btc_base58"
+				addOrUpdateHit(agg, hitKey(string(model.HitWalletAddress), firstDeviceID(artifacts), ruleID, addr), model.RuleHit{
+					ID:           id.New("hit"),
+					CaseID:       firstCaseID(artifacts),
+					DeviceID:     firstDeviceID(artifacts),
+					Type:         model.HitWalletAddress,
+					RuleID:       ruleID,
+					RuleName:     "钱包地址抽取(BTC base58)",
+					RuleVersion:  "builtin-0.1.0",
+					MatchedValue: addr,
+					FirstSeenAt:  first,
+					LastSeenAt:   first,
+					Confidence:   0.80,
+					Verdict:      "suspected",
+					DetailJSON: mustJSON(map[string]any{
+						"chain":       "btc",
+						"format":      "base58",
+						"match_field": src.Field,
+						"browser":     v.Browser,
+						"profile":     v.Profile,
+						"visited_at":  v.VisitedAt,
+						"sample":      truncateText(text, 240),
+					}),
+					ArtifactIDs: artifactIDs,
+				})
+			}
+		}
+	}
+}
+
+func isBTCBase58Char(b byte) bool {
+	switch {
+	case b >= '1' && b <= '9':
+		return true
+	case b >= 'A' && b <= 'H':
+		return true
+	case b >= 'J' && b <= 'N':
+		return true
+	case b >= 'P' && b <= 'Z':
+		return true
+	case b >= 'a' && b <= 'k':
+		return true
+	case b >= 'm' && b <= 'z':
+		return true
+	default:
+		return false
+	}
+}
+
+func truncateText(s string, max int) string {
+	s = strings.TrimSpace(s)
+	if max <= 0 || len(s) <= max {
+		return s
+	}
+	return s[:max] + "..."
 }
 
 // hitAccumulator 用于把同一规则的多次命中合并成一条记录。
@@ -271,7 +449,7 @@ func matchExchanges(loaded *rules.LoadedRules, visits []model.VisitRecord, artif
 				first = time.Now().Unix()
 			}
 
-			addOrUpdateHit(agg, hitKey(string(model.HitExchangeVisited), exr.ID, domain), model.RuleHit{
+			addOrUpdateHit(agg, hitKey(string(model.HitExchangeVisited), firstDeviceID(artifacts), exr.ID, domain), model.RuleHit{
 				ID:           id.New("hit"),
 				CaseID:       firstCaseID(artifacts),
 				DeviceID:     firstDeviceID(artifacts),

@@ -166,6 +166,50 @@ func (s *Store) SaveArtifacts(ctx context.Context, artifacts []model.Artifact) e
 	return nil
 }
 
+// EnsureRuleBundle 确保 rule_bundles 中存在一条“规则包留痕”记录，并返回 bundle_id。
+//
+// 规则包用于把“本次命中使用的规则版本/文件哈希”固化到数据库中，方便后续审计追溯：
+// - wallet_signatures（钱包识别库）
+// - exchange_domains（交易所域名库）
+//
+// 同一 (bundle_type, bundle_version, sha256) 视为同一个规则包，重复加载会复用同一条记录。
+func (s *Store) EnsureRuleBundle(ctx context.Context, bundleType, bundleVersion, sha256, source string) (string, error) {
+	bundleType = strings.TrimSpace(bundleType)
+	bundleVersion = strings.TrimSpace(bundleVersion)
+	sha256 = strings.TrimSpace(sha256)
+	source = strings.TrimSpace(source)
+	if bundleType == "" || bundleVersion == "" || sha256 == "" {
+		return "", fmt.Errorf("invalid rule bundle: type=%q version=%q sha256=%q", bundleType, bundleVersion, sha256)
+	}
+
+	// 先查是否已有记录（避免重复插入）
+	var existingID string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT bundle_id
+		FROM rule_bundles
+		WHERE bundle_type = ? AND bundle_version = ? AND sha256 = ?
+		ORDER BY loaded_at DESC, bundle_id DESC
+		LIMIT 1
+	`, bundleType, bundleVersion, sha256).Scan(&existingID)
+	if err == nil && strings.TrimSpace(existingID) != "" {
+		return existingID, nil
+	}
+	if err != nil && err != sql.ErrNoRows {
+		return "", fmt.Errorf("query rule_bundles: %w", err)
+	}
+
+	bundleID := id.New("rb")
+	now := time.Now().Unix()
+	_, err = s.db.ExecContext(ctx, `
+		INSERT INTO rule_bundles(bundle_id, bundle_type, bundle_version, sha256, source, loaded_at)
+		VALUES(?, ?, ?, ?, ?, ?)
+	`, bundleID, bundleType, bundleVersion, sha256, nullIfEmpty(source), now)
+	if err != nil {
+		return "", fmt.Errorf("insert rule_bundles: %w", err)
+	}
+	return bundleID, nil
+}
+
 // SavePrecheckResults 批量写入前置条件检查结果。
 // 该表用于把“为何可采/为何不可采”的判断过程固化到数据库中。
 func (s *Store) SavePrecheckResults(ctx context.Context, checks []model.PrecheckResult) error {
@@ -274,7 +318,7 @@ func (s *Store) SaveRuleHits(ctx context.Context, hits []model.RuleHit) error {
 			rule_bundle_id, rule_version, matched_value, first_seen_at, last_seen_at,
 			confidence, verdict, detail_json, created_at
 		)
-		VALUES(?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
 		return fmt.Errorf("prepare insert hits: %w", err)
@@ -299,6 +343,7 @@ func (s *Store) SaveRuleHits(ctx context.Context, hits []model.RuleHit) error {
 			string(h.Type),
 			h.RuleID,
 			h.RuleName,
+			nullIfEmpty(h.RuleBundleID),
 			h.RuleVersion,
 			h.MatchedValue,
 			h.FirstSeenAt,

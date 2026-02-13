@@ -305,10 +305,36 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		return nil, err
 	}
 
+	// 规则包留痕（best effort）：用于把“命中来自哪个规则文件版本/哈希”固化到 DB。
+	walletBundleID := ""
+	exchangeBundleID := ""
+	if id, err := store.EnsureRuleBundle(ctx, "wallet_signatures", loaded.Wallet.Version, loaded.WalletSHA256, opts.WalletRulePath); err == nil {
+		walletBundleID = id
+	} else {
+		_ = store.AppendAudit(ctx, caseID, "", "mobile_scan", "rule_bundle_wallet", "skipped", opts.Operator, "mobilescan.Run", map[string]any{"error": err.Error()})
+	}
+	if id, err := store.EnsureRuleBundle(ctx, "exchange_domains", loaded.Exchange.Version, loaded.ExchangeSHA256, opts.ExchangeRulePath); err == nil {
+		exchangeBundleID = id
+	} else {
+		_ = store.AppendAudit(ctx, caseID, "", "mobile_scan", "rule_bundle_exchange", "skipped", opts.Operator, "mobilescan.Run", map[string]any{"error": err.Error()})
+	}
+
 	matchResult, err := matcher.MatchMobileArtifacts(loaded, scanResult.Artifacts)
 	if err != nil {
 		_ = store.AppendAudit(ctx, caseID, "", "mobile_scan", "match_rules", "failed", opts.Operator, "mobilescan.Run", map[string]any{"error": err.Error()})
 		return nil, err
+	}
+
+	// 回填 rule_bundle_id：
+	// - 钱包安装命中来自 wallet_signatures
+	// - 交易所访问命中来自 exchange_domains（如果移动端后续也采集到浏览历史）
+	for i := range matchResult.Hits {
+		switch matchResult.Hits[i].Type {
+		case model.HitWalletInstalled:
+			matchResult.Hits[i].RuleBundleID = walletBundleID
+		case model.HitExchangeVisited:
+			matchResult.Hits[i].RuleBundleID = exchangeBundleID
+		}
 	}
 
 	if err := store.SaveRuleHits(ctx, matchResult.Hits); err != nil {
@@ -316,12 +342,20 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		return nil, err
 	}
 
-	reportPath, reportHash, reportErr := writeInternalReport(opts.DBPath, caseID, opts.AuthorizationOrder, opts.PrivacyMode, scanResult.Devices, scanResult.Artifacts, matchResult.Hits, scanResult.Warnings, prechecks)
-	reportID := ""
-	if reportErr == nil {
-		reportID, _ = store.SaveReport(ctx, caseID, "internal_json", reportPath, reportHash, "mobilescan-0.1.0", "ready")
+	// 内部报告（JSON + HTML）
+	jsonPath, jsonHash, jsonErr := writeInternalJSONReport(opts.DBPath, caseID, opts.AuthorizationOrder, opts.PrivacyMode, scanResult.Devices, scanResult.Artifacts, matchResult.Hits, scanResult.Warnings, prechecks)
+	jsonReportID := ""
+	if jsonErr == nil {
+		jsonReportID, _ = store.SaveReport(ctx, caseID, "internal_json", jsonPath, jsonHash, "mobilescan-0.1.0", "ready")
 	} else {
-		scanResult.Warnings = append(scanResult.Warnings, "write report failed: "+reportErr.Error())
+		scanResult.Warnings = append(scanResult.Warnings, "write internal_json report failed: "+jsonErr.Error())
+	}
+
+	htmlPath, htmlHash, htmlErr := writeInternalHTMLReport(opts.DBPath, caseID, opts.AuthorizationOrder, opts.PrivacyMode, scanResult.Devices, scanResult.Artifacts, matchResult.Hits, scanResult.Warnings, prechecks)
+	if htmlErr == nil {
+		_, _ = store.SaveReport(ctx, caseID, "internal_html", htmlPath, htmlHash, "mobilescan-0.1.0", "ready")
+	} else {
+		scanResult.Warnings = append(scanResult.Warnings, "write internal_html report failed: "+htmlErr.Error())
 	}
 
 	status := "success"
@@ -329,11 +363,12 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		status = "skipped"
 	}
 	_ = store.AppendAudit(ctx, caseID, "", "mobile_scan", "scan_finish", status, opts.Operator, "mobilescan.Run", map[string]any{
-		"device_count":   len(scanResult.Devices),
-		"artifact_count": len(scanResult.Artifacts),
-		"hit_count":      len(matchResult.Hits),
-		"warnings":       scanResult.Warnings,
-		"report":         reportPath,
+		"device_count":         len(scanResult.Devices),
+		"artifact_count":       len(scanResult.Artifacts),
+		"hit_count":            len(matchResult.Hits),
+		"warnings":             scanResult.Warnings,
+		"report_internal_json": jsonPath,
+		"report_internal_html": htmlPath,
 	})
 
 	walletHits := 0
@@ -352,8 +387,8 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		HitCount:      len(matchResult.Hits),
 		WalletHits:    walletHits,
 		Warnings:      scanResult.Warnings,
-		ReportID:      reportID,
-		ReportPath:    reportPath,
+		ReportID:      jsonReportID,
+		ReportPath:    jsonPath,
 		StartedAt:     started,
 		FinishedAt:    time.Now().Unix(),
 	}, nil
@@ -388,7 +423,7 @@ func mustJSON(v any) []byte {
 	return raw
 }
 
-func writeInternalReport(dbPath, caseID, authOrder, privacyMode string, devices []mobile.ConnectedDevice, artifacts []model.Artifact, hits []model.RuleHit, warnings []string, prechecks []model.PrecheckResult) (path string, sha string, err error) {
+func writeInternalJSONReport(dbPath, caseID, authOrder, privacyMode string, devices []mobile.ConnectedDevice, artifacts []model.Artifact, hits []model.RuleHit, warnings []string, prechecks []model.PrecheckResult) (path string, sha string, err error) {
 	reportDir := filepath.Join(filepath.Dir(dbPath), "reports")
 	if err := os.MkdirAll(reportDir, 0o755); err != nil {
 		return "", "", err
@@ -474,4 +509,179 @@ func writeInternalReport(dbPath, caseID, authOrder, privacyMode string, devices 
 		return "", "", err
 	}
 	return path, sum, nil
+}
+
+func writeInternalHTMLReport(dbPath, caseID, authOrder, privacyMode string, devices []mobile.ConnectedDevice, artifacts []model.Artifact, hits []model.RuleHit, warnings []string, prechecks []model.PrecheckResult) (path string, sha string, err error) {
+	reportDir := filepath.Join(filepath.Dir(dbPath), "reports")
+	if err := os.MkdirAll(reportDir, 0o755); err != nil {
+		return "", "", err
+	}
+
+	now := time.Now().Unix()
+	filename := fmt.Sprintf("%s_mobile_internal_%d.html", caseID, now)
+	path = filepath.Join(reportDir, filename)
+
+	var b strings.Builder
+	b.Grow(32 * 1024)
+	b.WriteString("<!doctype html>\n<html lang=\"zh-CN\">\n<head>\n")
+	b.WriteString("<meta charset=\"utf-8\"/>\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"/>\n")
+	b.WriteString("<title>数字货币痕迹检测报告（移动端，内部）</title>\n")
+	b.WriteString("<style>\n")
+	b.WriteString("body{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,\"Liberation Mono\",monospace;background:#0b1220;color:#e8e8e8;margin:0;padding:24px;}\n")
+	b.WriteString("h1{font-size:18px;margin:0 0 12px 0;}\n")
+	b.WriteString("h2{font-size:14px;margin:20px 0 8px 0;color:#4fc3f7;border-bottom:1px solid #1f2937;padding-bottom:6px;}\n")
+	b.WriteString(".muted{color:#b8bcc4;}\n")
+	b.WriteString(".kv{display:grid;grid-template-columns:160px 1fr;gap:6px 12px;font-size:12px;}\n")
+	b.WriteString(".box{border:1px solid #1f2937;background:#111827;padding:12px;border-radius:6px;}\n")
+	b.WriteString("table{width:100%;border-collapse:collapse;font-size:12px;}\n")
+	b.WriteString("th,td{border:1px solid #1f2937;padding:6px 8px;vertical-align:top;}\n")
+	b.WriteString("th{background:#0d0f12;color:#b8bcc4;text-align:left;}\n")
+	b.WriteString(".ok{color:#22c55e;}\n")
+	b.WriteString(".warn{color:#ffa726;}\n")
+	b.WriteString(".bad{color:#ff6b6b;}\n")
+	b.WriteString(".mono{font-family:inherit;word-break:break-all;}\n")
+	b.WriteString("</style>\n</head>\n<body>\n")
+
+	b.WriteString("<h1>数字货币痕迹检测报告（移动端，内部）</h1>\n")
+	b.WriteString("<div class=\"box kv\">")
+	b.WriteString("<div class=\"muted\">case_id</div><div class=\"mono\">" + htmlEscape(caseID) + "</div>")
+	b.WriteString("<div class=\"muted\">generated_at</div><div class=\"mono\">" + htmlEscape(time.Unix(now, 0).Format("2006-01-02 15:04:05")) + "</div>")
+	b.WriteString("<div class=\"muted\">authorization_order</div><div class=\"mono\">" + htmlEscape(authOrder) + "</div>")
+	b.WriteString("<div class=\"muted\">privacy_mode</div><div class=\"mono\">" + htmlEscape(privacyMode) + "</div>")
+	b.WriteString("</div>\n")
+
+	b.WriteString("<h2>设备</h2>\n<div class=\"box\">")
+	if len(devices) == 0 {
+		b.WriteString("<div class=\"muted\">(empty)</div>")
+	} else {
+		b.WriteString("<table><thead><tr><th>os</th><th>name</th><th>identifier</th><th>connection</th><th>authorized</th><th>note</th></tr></thead><tbody>")
+		for _, d := range devices {
+			authText := "no"
+			if d.Authorized {
+				authText = "yes"
+			}
+			b.WriteString("<tr>")
+			b.WriteString("<td class=\"mono\">" + htmlEscape(string(d.Device.OS)) + "</td>")
+			b.WriteString("<td class=\"mono\">" + htmlEscape(d.Device.Name) + "</td>")
+			b.WriteString("<td class=\"mono\">" + htmlEscape(d.Device.Identifier) + "</td>")
+			b.WriteString("<td class=\"mono\">" + htmlEscape(d.ConnectionType) + "</td>")
+			b.WriteString("<td class=\"mono\">" + htmlEscape(authText) + "</td>")
+			b.WriteString("<td class=\"mono\">" + htmlEscape(d.AuthNote) + "</td>")
+			b.WriteString("</tr>")
+		}
+		b.WriteString("</tbody></table>")
+	}
+	b.WriteString("</div>\n")
+
+	b.WriteString("<h2>前置条件检查</h2>\n<div class=\"box\">")
+	if len(prechecks) == 0 {
+		b.WriteString("<div class=\"muted\">(empty)</div>")
+	} else {
+		b.WriteString("<table><thead><tr><th>scope</th><th>code</th><th>name</th><th>required</th><th>status</th><th>message</th><th>checked_at</th></tr></thead><tbody>")
+		for _, c := range prechecks {
+			statusClass := "muted"
+			switch c.Status {
+			case model.PrecheckPassed:
+				statusClass = "ok"
+			case model.PrecheckFailed:
+				statusClass = "bad"
+			case model.PrecheckSkipped:
+				statusClass = "warn"
+			}
+			b.WriteString("<tr>")
+			b.WriteString("<td class=\"mono\">" + htmlEscape(c.ScanScope) + "</td>")
+			b.WriteString("<td class=\"mono\">" + htmlEscape(c.CheckCode) + "</td>")
+			b.WriteString("<td>" + htmlEscape(c.CheckName) + "</td>")
+			if c.Required {
+				b.WriteString("<td>yes</td>")
+			} else {
+				b.WriteString("<td>no</td>")
+			}
+			b.WriteString("<td class=\"" + statusClass + "\">" + htmlEscape(string(c.Status)) + "</td>")
+			b.WriteString("<td class=\"mono\">" + htmlEscape(c.Message) + "</td>")
+			b.WriteString("<td class=\"mono\">" + htmlEscape(time.Unix(c.CheckedAt, 0).Format("2006-01-02 15:04:05")) + "</td>")
+			b.WriteString("</tr>")
+		}
+		b.WriteString("</tbody></table>")
+	}
+	b.WriteString("</div>\n")
+
+	b.WriteString("<h2>命中</h2>\n<div class=\"box\">")
+	if len(hits) == 0 {
+		b.WriteString("<div class=\"muted\">(empty)</div>")
+	} else {
+		b.WriteString("<table><thead><tr><th>type</th><th>rule</th><th>value</th><th>confidence</th><th>verdict</th><th>artifacts</th></tr></thead><tbody>")
+		for _, h := range hits {
+			b.WriteString("<tr>")
+			b.WriteString("<td class=\"mono\">" + htmlEscape(string(h.Type)) + "</td>")
+			b.WriteString("<td class=\"mono\">" + htmlEscape(h.RuleName) + " (" + htmlEscape(h.RuleID) + ")</td>")
+			b.WriteString("<td class=\"mono\">" + htmlEscape(h.MatchedValue) + "</td>")
+			b.WriteString("<td class=\"mono\">" + fmt.Sprintf("%.2f", h.Confidence) + "</td>")
+			b.WriteString("<td class=\"mono\">" + htmlEscape(h.Verdict) + "</td>")
+			b.WriteString("<td class=\"mono\">" + htmlEscape(strings.Join(h.ArtifactIDs, ",")) + "</td>")
+			b.WriteString("</tr>")
+		}
+		b.WriteString("</tbody></table>")
+	}
+	b.WriteString("</div>\n")
+
+	b.WriteString("<h2>证据</h2>\n<div class=\"box\">")
+	if len(artifacts) == 0 {
+		b.WriteString("<div class=\"muted\">(empty)</div>")
+	} else {
+		b.WriteString("<table><thead><tr><th>artifact_id</th><th>type</th><th>source</th><th>sha256</th><th>snapshot_path</th><th>collected_at</th></tr></thead><tbody>")
+		for _, a := range artifacts {
+			b.WriteString("<tr>")
+			b.WriteString("<td class=\"mono\">" + htmlEscape(a.ID) + "</td>")
+			b.WriteString("<td class=\"mono\">" + htmlEscape(string(a.Type)) + "</td>")
+			b.WriteString("<td class=\"mono\">" + htmlEscape(a.SourceRef) + "</td>")
+			b.WriteString("<td class=\"mono\">" + htmlEscape(a.SHA256) + "</td>")
+			b.WriteString("<td class=\"mono\">" + htmlEscape(a.SnapshotPath) + "</td>")
+			b.WriteString("<td class=\"mono\">" + htmlEscape(time.Unix(a.CollectedAt, 0).Format("2006-01-02 15:04:05")) + "</td>")
+			b.WriteString("</tr>")
+		}
+		b.WriteString("</tbody></table>")
+	}
+	b.WriteString("</div>\n")
+
+	b.WriteString("<h2>Warnings</h2>\n<div class=\"box\">")
+	if len(warnings) == 0 {
+		b.WriteString("<div class=\"muted\">(none)</div>")
+	} else {
+		b.WriteString("<ul>")
+		for _, w := range warnings {
+			if strings.TrimSpace(w) == "" {
+				continue
+			}
+			b.WriteString("<li class=\"mono\">" + htmlEscape(w) + "</li>")
+		}
+		b.WriteString("</ul>")
+	}
+	b.WriteString("</div>\n")
+
+	b.WriteString("</body>\n</html>\n")
+
+	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
+		return "", "", err
+	}
+
+	sum, _, err := hash.File(path)
+	if err != nil {
+		return "", "", err
+	}
+	return path, sum, nil
+}
+
+func htmlEscape(s string) string {
+	if s == "" {
+		return ""
+	}
+	replacer := strings.NewReplacer(
+		"&", "&amp;",
+		"<", "&lt;",
+		">", "&gt;",
+		"\"", "&quot;",
+		"'", "&#39;",
+	)
+	return replacer.Replace(s)
 }

@@ -236,6 +236,19 @@ func (s *Scanner) scanIOS(ctx context.Context, caseID string) ([]ConnectedDevice
 			continue
 		}
 
+		// iOS Safari 浏览历史（best effort）：
+		// - 依赖 iOS 全量备份可读（未加密/已解密）
+		// - 从 Manifest.db 定位 History.db 并解析为统一 VisitRecord
+		if visits, err := extractIOSSafariHistoryFromBackup(ctx, backupRoot); err != nil {
+			warnings = append(warnings, fmt.Sprintf("extract ios safari history failed (%s): %v", udid, err))
+		} else if len(visits) > 0 {
+			historyArtifact, err := s.makeArtifact(caseID, dev.ID, model.ArtifactBrowserHistory, "ios_safari_history", "ios_backup_manifest", visits)
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			artifacts = append(artifacts, historyArtifact)
+		}
+
 		packages, err := collectIOSPackages(ctx, udid)
 		if err != nil {
 			warnings = append(warnings, fmt.Sprintf("collect ios packages failed (%s): %v", udid, err))

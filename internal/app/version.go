@@ -9,4 +9,3 @@ var (
 	Commit    = ""
 	BuildTime = ""
 )
-
