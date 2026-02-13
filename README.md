@@ -1,5 +1,7 @@
 # crypto-inspector (scaffold)
 
+English | [简体中文](README.zh-CN.md)
+
 This repository now includes:
 
 - CLI entry: `cmd/inspector-cli`
