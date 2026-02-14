@@ -113,7 +113,7 @@ EOF
 
 # 启动器：确保 data 目录可写，规则路径可定位，并把日志落盘便于排障。
 cat > "$APP_DIR/Contents/MacOS/${APP_NAME}" <<'EOF'
-#!/usr/bin/env bash
+#!/bin/bash
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -125,8 +125,27 @@ LOG_DIR="${DATA_ROOT}/logs"
 
 mkdir -p "$DATA_DIR/evidence/ios_backups" "$LOG_DIR"
 
-exec "$RES/inspector-desktop" \
-  --ui webview \
+# 说明：
+# - 本 App 的本质是一个本地 Web UI/API 服务。
+# - 在 Apple Silicon（arm64）上优先使用内嵌 WebView（更像原生客户端）。
+# - 在 Intel（x86_64）或因构建限制导致 WebView 不可用时，降级为打开系统浏览器（仍可用）。
+#
+# 额外兼容：如果脚本在 Rosetta（x86_64 翻译层）下运行，依然尝试强制启动 arm64 slice，
+# 以避免“误选 x86_64 slice 导致 webview 不可用”的情况。
+ARCH="$(uname -m 2>/dev/null || echo unknown)"
+TRANSLATED="$(sysctl -n sysctl.proc_translated 2>/dev/null || echo 0)"
+
+UI_MODE="browser"
+EXEC_PREFIX=()
+if [ "$ARCH" = "arm64" ] || [ "$TRANSLATED" = "1" ]; then
+  UI_MODE="webview"
+  if command -v arch >/dev/null 2>&1; then
+    EXEC_PREFIX=(arch -arm64)
+  fi
+fi
+
+exec "${EXEC_PREFIX[@]}" "$RES/inspector-desktop" \
+  --ui "$UI_MODE" \
   --listen 127.0.0.1:8787 \
   --db "$DATA_DIR/inspector.db" \
   --evidence-dir "$DATA_DIR/evidence" \

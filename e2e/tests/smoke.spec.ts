@@ -24,6 +24,53 @@ test("E2E smoke: 建案 -> 主机采集 -> 司法导出ZIP -> verify", async ({
     page.getByRole("heading", { name: "01 案件信息" })
   ).toBeVisible();
 
+  // --- 规则导入/激活（通过 API，等价于 UI 上传并启用） ---
+  // 目的：验证 rules 管理闭环（落盘 + 校验 + 设置 active）可用。
+  // 注意：这里不依赖具体命中结果，只验证“规则文件可被系统识别并被设置为 active”。
+  const walletYaml = fs.readFileSync(
+    path.join(repoRoot, "rules/wallet_signatures.template.yaml"),
+    "utf-8"
+  );
+  const exchangeYaml = fs.readFileSync(
+    path.join(repoRoot, "rules/exchange_domains.template.yaml"),
+    "utf-8"
+  );
+
+  const importWalletResp = await request.post("/api/rules?action=import", {
+    data: {
+      kind: "wallet",
+      filename: "wallet_signatures.template.yaml",
+      content: walletYaml,
+    },
+  });
+  expect(importWalletResp.ok()).toBeTruthy();
+
+  const importExchangeResp = await request.post("/api/rules?action=import", {
+    data: {
+      kind: "exchange",
+      filename: "exchange_domains.template.yaml",
+      content: exchangeYaml,
+    },
+  });
+  expect(importExchangeResp.ok()).toBeTruthy();
+
+  const rulesAfterResp = await request.get("/api/rules");
+  expect(rulesAfterResp.ok()).toBeTruthy();
+  const rulesAfterJSON = (await rulesAfterResp.json()) as any;
+  expect(rulesAfterJSON?.ok).toBeTruthy();
+  const activeWallet = String(rulesAfterJSON?.active?.wallet_path || "");
+  const activeExchange = String(rulesAfterJSON?.active?.exchange_path || "");
+  expect(activeWallet).toBeTruthy();
+  expect(activeExchange).toBeTruthy();
+  const activeWalletAbs = path.isAbsolute(activeWallet)
+    ? activeWallet
+    : path.resolve(repoRoot, activeWallet);
+  const activeExchangeAbs = path.isAbsolute(activeExchange)
+    ? activeExchange
+    : path.resolve(repoRoot, activeExchange);
+  expect(fs.existsSync(activeWalletAbs)).toBeTruthy();
+  expect(fs.existsSync(activeExchangeAbs)).toBeTruthy();
+
   // --- 建案 ---
   const caseNo = `E2E-${Date.now()}`;
   await page.getByPlaceholder("如：2026-01-001（可选）").fill(caseNo);
@@ -70,6 +117,20 @@ test("E2E smoke: 建案 -> 主机采集 -> 司法导出ZIP -> verify", async ({
   const artifacts = (artsJSON?.artifacts as any[]) || [];
   expect(artifacts.length).toBeGreaterThan(0);
 
+  // --- 下载一条证据快照（API） ---
+  // 选择体积最小的 artifact，避免下载过大的 zip/库快照导致 E2E 变慢/波动。
+  const smallestArtifact = [...artifacts].sort(
+    (a, b) => (Number(a?.size_bytes) || 0) - (Number(b?.size_bytes) || 0)
+  )[0];
+  const smallestArtifactID = String(smallestArtifact?.artifact_id || "");
+  expect(smallestArtifactID).toBeTruthy();
+  const dlResp = await request.get(
+    `/api/artifacts/${encodeURIComponent(smallestArtifactID)}/download`
+  );
+  expect(dlResp.ok()).toBeTruthy();
+  const dlBody = await dlResp.body();
+  expect(dlBody.byteLength).toBeGreaterThan(10);
+
   // --- 校验证据快照（sha256/size） ---
   // E2E 环境下证据目录应当完整可复核：全部 ok。
   const verifyArtifactsResp = await request.post(
@@ -94,6 +155,42 @@ test("E2E smoke: 建案 -> 主机采集 -> 司法导出ZIP -> verify", async ({
   await expect(
     page.getByRole("heading", { name: "07 报告生成" })
   ).toBeVisible();
+
+  // internal_html/internal_json 报告应在采集任务结束时自动生成。
+  const reportsAfterScanResp = await request.get(
+    `/api/cases/${encodeURIComponent(caseID)}/reports`
+  );
+  expect(reportsAfterScanResp.ok()).toBeTruthy();
+  const reportsAfterScanJSON = (await reportsAfterScanResp.json()) as any;
+  const reportsAfterScan = (reportsAfterScanJSON?.reports as any[]) || [];
+  const internalHTML = reportsAfterScan.find(
+    (r) => r?.report_type === "internal_html"
+  );
+  const internalJSON = reportsAfterScan.find(
+    (r) => r?.report_type === "internal_json"
+  );
+  expect(internalHTML).toBeTruthy();
+  expect(internalJSON).toBeTruthy();
+
+  const internalHTMLResp = await request.get(
+    `/api/cases/${encodeURIComponent(caseID)}/report?report_id=${encodeURIComponent(
+      internalHTML.report_id
+    )}&content=true`
+  );
+  expect(internalHTMLResp.ok()).toBeTruthy();
+  const internalHTMLJSON = (await internalHTMLResp.json()) as any;
+  expect(internalHTMLJSON?.content_available).toBeTruthy();
+  expect(String(internalHTMLJSON?.content || "").length).toBeGreaterThan(50);
+
+  const internalJSONResp = await request.get(
+    `/api/cases/${encodeURIComponent(caseID)}/report?report_id=${encodeURIComponent(
+      internalJSON.report_id
+    )}&content=true`
+  );
+  expect(internalJSONResp.ok()).toBeTruthy();
+  const internalJSONBody = (await internalJSONResp.json()) as any;
+  expect(internalJSONBody?.content_available).toBeTruthy();
+  expect(String(internalJSONBody?.content || "").length).toBeGreaterThan(20);
 
   // --- 生成取证 PDF ---
   await page.getByRole("button", { name: "[生成取证 PDF]" }).click();
