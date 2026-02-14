@@ -15,6 +15,7 @@ Before making any change, read in this order:
 7. `docs/项目目录结构与模块接口.md` (architecture)
 8. `docs/数据字典与证据字段规范.md` (schema/evidence/hit types)
 9. `测试报告.md` (what was verified and how)
+10. `e2e/third_party_feedback/README.md` (how to write independent QA feedback)
 
 ## Operating Rules
 
@@ -26,4 +27,3 @@ Before making any change, read in this order:
 
 - Avoid destructive git commands (e.g. `git reset --hard`) unless explicitly requested.
 - Prefer additive changes and small, reviewable commits.
-

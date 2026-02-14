@@ -70,11 +70,38 @@ test("E2E smoke: 建案 -> 主机采集 -> 司法导出ZIP -> verify", async ({
   const artifacts = (artsJSON?.artifacts as any[]) || [];
   expect(artifacts.length).toBeGreaterThan(0);
 
+  // --- 校验证据快照（sha256/size） ---
+  // E2E 环境下证据目录应当完整可复核：全部 ok。
+  const verifyArtifactsResp = await request.post(
+    `/api/cases/${encodeURIComponent(caseID)}/verify/artifacts`,
+    { data: { operator: "e2e", note: "e2e verify artifacts" } }
+  );
+  expect(verifyArtifactsResp.ok()).toBeTruthy();
+  const verifyArtifactsJSON = (await verifyArtifactsResp.json()) as any;
+  expect(verifyArtifactsJSON?.ok).toBeTruthy();
+
+  // --- 校验审计链（强校验：prev_hash 连续 + chain_hash 重算一致） ---
+  const verifyAuditsResp = await request.post(
+    `/api/cases/${encodeURIComponent(caseID)}/verify/audits`,
+    { data: { operator: "e2e", note: "e2e verify audits", limit: 5000 } }
+  );
+  expect(verifyAuditsResp.ok()).toBeTruthy();
+  const verifyAuditsJSON = (await verifyAuditsResp.json()) as any;
+  expect(verifyAuditsJSON?.ok).toBeTruthy();
+
   // --- 生成司法导出 ZIP ---
   await page.goto("/report");
   await expect(
     page.getByRole("heading", { name: "07 报告生成" })
   ).toBeVisible();
+
+  // --- 生成取证 PDF ---
+  await page.getByRole("button", { name: "[生成取证 PDF]" }).click();
+  await expect(
+    page.getByText("已生成（请在“历史报告”列表中下载 forensic_pdf）")
+  ).toBeVisible({
+    timeout: 3 * 60 * 1000,
+  });
 
   await page.getByRole("button", { name: "[生成司法导出包（ZIP）]" }).click();
   await expect(page.getByText("已生成（请在“历史报告”列表中下载 forensic_zip）")).toBeVisible({
@@ -88,8 +115,19 @@ test("E2E smoke: 建案 -> 主机采集 -> 司法导出ZIP -> verify", async ({
   expect(reportsResp.ok()).toBeTruthy();
   const reportsJSON = (await reportsResp.json()) as any;
   const reports = (reportsJSON?.reports as any[]) || [];
+  const pdfReport = reports.find((r) => r?.report_type === "forensic_pdf");
+  expect(pdfReport).toBeTruthy();
   const zipReport = reports.find((r) => r?.report_type === "forensic_zip");
   expect(zipReport).toBeTruthy();
+
+  // PDF 文件存在性检查（不校验内容；二进制下载校验由 /download 负责）
+  const pdfPath = String(pdfReport.file_path || "").trim();
+  expect(pdfPath.endsWith(".pdf")).toBeTruthy();
+  const pdfAbs = path.isAbsolute(pdfPath)
+    ? pdfPath
+    : path.resolve(repoRoot, pdfPath);
+  expect(fs.existsSync(pdfAbs)).toBeTruthy();
+
   const zipPath = String(zipReport.file_path || "").trim();
   expect(zipPath.endsWith(".zip")).toBeTruthy();
   const zipAbs = path.isAbsolute(zipPath) ? zipPath : path.resolve(repoRoot, zipPath);

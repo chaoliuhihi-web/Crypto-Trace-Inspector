@@ -21,6 +21,7 @@ If you are continuing this repo with another AI/agent via GitHub sync, start fro
 - `AGENTS.md` (required reading order)
 - `MEMORY.md` (curated long-term decisions)
 - `memory/YYYY-MM-DD.md` (daily progress logs)
+- `e2e/third_party_feedback/` (independent QA feedback templates + runbook)
 
 Do not commit secrets or private data. For private local notes, use `MEMORY.private.md` (gitignored).
 

@@ -45,6 +45,7 @@
 2. `MEMORY.md`：长期决策与边界（必读）
 3. `memory/YYYY-MM-DD.md`：最近两天进展（必读）
 4. `TODOLIST.md`：剩余工作与验证项（必读）
+5. `e2e/third_party_feedback/README.md`：第三方测试反馈规范（建议）
 
 注意：不要把密钥、证据原始数据、个人隐私写入 Git；这些应留在本地数据目录。
 
