@@ -14,6 +14,16 @@ This repository now includes:
 - Web UI + API (embedded static files): `internal/services/webapp`
 - UI source (React/Vite, internal trial): `docs/产品前端规划/数字货币痕迹检测系统`
 
+## Agent/AI Onboarding (Important)
+
+If you are continuing this repo with another AI/agent via GitHub sync, start from:
+
+- `AGENTS.md` (required reading order)
+- `MEMORY.md` (curated long-term decisions)
+- `memory/YYYY-MM-DD.md` (daily progress logs)
+
+Do not commit secrets or private data. For private local notes, use `MEMORY.private.md` (gitignored).
+
 ## Quick Start
 
 Prerequisite: Go 1.24+
