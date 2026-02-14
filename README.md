@@ -5,7 +5,7 @@ English | [简体中文](README.zh-CN.md)
 This repository now includes:
 
 - CLI entry: `cmd/inspector-cli`
-- Desktop launcher (start webapp + auto open browser): `cmd/inspector-desktop`
+- Desktop launcher (start webapp + auto open UI; browser by default, macOS supports `--ui webview`): `cmd/inspector-desktop`
 - SQLite migrator with embedded SQL: `internal/adapters/store/sqlite`
 - Rule loader + validation: `internal/adapters/rules`
 - Rule templates:
@@ -72,6 +72,13 @@ go run ./cmd/inspector-cli serve \
 
 # Desktop launcher (recommended)
 go run ./cmd/inspector-desktop \
+  --db data/inspector.db \
+  --evidence-dir data/evidence \
+  --listen 127.0.0.1:8787
+
+# macOS embedded window (WebView)
+go run ./cmd/inspector-desktop \
+  --ui webview \
   --db data/inspector.db \
   --evidence-dir data/evidence \
   --listen 127.0.0.1:8787

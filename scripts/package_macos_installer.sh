@@ -8,8 +8,10 @@ set -euo pipefail
 # - PKG（“安装器”形态：双击安装到 /Applications）
 #
 # 说明：
-# - 本项目的“桌面端”本质上是一个本地 Web UI/API 服务 + 自动打开浏览器，
-#   不依赖 Wails/CGO，适合快速内测与离线分发。
+# - 本项目的“桌面端”本质上是一个本地 Web UI/API 服务：
+#   - 默认模式：启动服务 + 打开系统浏览器
+#   - macOS 可选：`--ui webview` 以内嵌窗口方式启动（依赖系统 WebKit / CGO）
+#   不引入 Wails 等重量框架，便于快速内测与离线分发。
 # - 安装后运行数据不会写入 /Applications（避免权限问题），而是落在：
 #     ~/Library/Application Support/Crypto-Trace-Inspector/
 # - 规则文件随 App 一并打包在 .app 的 Resources/rules 中（只读）。
@@ -124,6 +126,7 @@ LOG_DIR="${DATA_ROOT}/logs"
 mkdir -p "$DATA_DIR/evidence/ios_backups" "$LOG_DIR"
 
 exec "$RES/inspector-desktop" \
+  --ui webview \
   --listen 127.0.0.1:8787 \
   --db "$DATA_DIR/inspector.db" \
   --evidence-dir "$DATA_DIR/evidence" \
@@ -173,4 +176,3 @@ echo "macOS installers ready:"
 echo "  app: $APP_DIR"
 echo "  dmg: $DMG_PATH"
 echo "  pkg: $PKG_PATH"
-

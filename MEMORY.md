@@ -26,3 +26,11 @@ This file is a curated, long-term memory for the project. Keep it free of secret
   - Signing/notarization/release pipeline.
   - E2E automated regression (Playwright).
 
+## Recent Implementation Notes
+
+- Desktop UI:
+  - `cmd/inspector-desktop` supports `--ui browser|webview|none`.
+  - macOS can use `--ui webview` (cgo + system WebKit) for an embedded window.
+
+- E2E:
+  - Playwright smoke test lives in `e2e/` and can be run via `bash scripts/e2e.sh`.

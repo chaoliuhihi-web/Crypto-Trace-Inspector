@@ -58,6 +58,7 @@ set -euo pipefail
 DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$DIR"
 ./inspector-desktop \
+  --ui webview \
   --listen 127.0.0.1:8787 \
   --db data/inspector.db \
   --evidence-dir data/evidence \

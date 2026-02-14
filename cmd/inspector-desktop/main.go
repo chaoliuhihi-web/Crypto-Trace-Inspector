@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
@@ -26,10 +27,12 @@ func main() {
 
 // 这个“desktop”入口的目标是降低内测门槛：
 // - 一键启动内置 Web UI/API（本地端口监听）
-// - 自动打开浏览器到工作台页面
+// - 自动打开 UI（默认 browser；macOS 可选 webview 内嵌窗口）
 //
-// 这里不引入 Wails/webview 等 GUI 依赖，避免 CGO/打包复杂度；
-// 后续如确有需要，再把该入口替换为真正的桌面壳即可。
+// 说明：
+// - 我们不引入 Wails 等“全家桶”框架，先把核心闭环做扎实；
+// - 在 macOS 上提供一个可选的 WebView 模式（--ui webview），用于内测体验；
+// - Windows 仍默认走打开系统浏览器（更利于跨平台交付与 CI）。
 func run(ctx context.Context, args []string) error {
 	cfg := app.DefaultConfig()
 
@@ -42,6 +45,7 @@ func run(ctx context.Context, args []string) error {
 	exchangePath := fs.String("exchange", cfg.ExchangeRulePath, "exchange rule file")
 	enableIOSFullBackup := fs.Bool("ios-full-backup", true, "try full iOS backup when idevicebackup2 is available")
 	privacyMode := fs.String("privacy-mode", "off", "privacy mode switch (reserved): off|masked")
+	uiMode := fs.String("ui", "browser", "ui mode: browser|webview|none (webview only on macOS+cgo)")
 	noOpen := fs.Bool("no-open", false, "do not auto-open browser")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -68,14 +72,53 @@ func run(ctx context.Context, args []string) error {
 	uiURL := "http://" + normalizeListenForBrowser(*listen)
 	healthURL := uiURL + "/api/health"
 
-	// 等服务起来再打开浏览器（减少“空白页/加载失败”的概率）
-	if !*noOpen {
+	// 等服务起来再打开 UI（减少“空白页/加载失败”的概率）
+	if !*noOpen && strings.ToLower(strings.TrimSpace(*uiMode)) != "none" {
 		_ = waitForHTTP(sigCtx, healthURL, 12*time.Second)
-		_ = openBrowser(uiURL)
 	}
 
-	// 阻塞等待 server 退出（或报错）
-	return <-serverErrCh
+	switch strings.ToLower(strings.TrimSpace(*uiMode)) {
+	case "", "browser":
+		if !*noOpen {
+			_ = openBrowser(uiURL)
+		}
+		// 阻塞等待 server 退出（或报错）
+		return <-serverErrCh
+	case "webview":
+		if *noOpen {
+			// no-open 用于 CI/测试：既不打开浏览器，也不弹 WebView 窗口。
+			return <-serverErrCh
+		}
+		w, err := newWebViewWindow(uiURL, "Crypto Trace Inspector")
+		if err != nil {
+			return err
+		}
+		defer w.Destroy()
+
+		// 如果服务异常退出，尽量关闭窗口，避免“窗口卡住但服务已死”的体验。
+		serverForwardCh := make(chan error, 1)
+		go func() {
+			err := <-serverErrCh
+			serverForwardCh <- err
+			w.Terminate()
+		}()
+
+		// Run 阻塞直到用户关闭窗口。
+		w.Run()
+
+		// 用户关闭窗口后，优雅退出服务（触发 http.Server.Shutdown）。
+		cancel()
+
+		// 等待服务退出（给点超时，避免异常情况下卡住）
+		select {
+		case err := <-serverForwardCh:
+			return err
+		case <-time.After(6 * time.Second):
+			return nil
+		}
+	default:
+		return fmt.Errorf("invalid --ui: %s (expected browser|webview|none)", *uiMode)
+	}
 }
 
 func normalizeListenForBrowser(listen string) string {
@@ -125,4 +168,16 @@ func openBrowser(url string) error {
 	}
 	// 不阻塞主流程：浏览器打开与否不影响服务运行。
 	return cmd.Start()
+}
+
+// uiWindow 是“桌面壳”的最小抽象。
+//
+// - browser 模式：不需要 window
+// - webview 模式：需要一个可运行/可被终止的窗口
+//
+// 注意：webview 通常要求 Run 在 UI 线程执行；Terminate 允许后台调用。
+type uiWindow interface {
+	Run()
+	Terminate()
+	Destroy()
 }

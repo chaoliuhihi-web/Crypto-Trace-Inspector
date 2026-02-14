@@ -118,13 +118,28 @@
 
 ## P2（增强：产品化与跨平台体验）
 
-- [ ] 13. 真桌面壳（Wails/WebView）替换“打开系统浏览器”
+- [x] 13. 真桌面壳（WebView）替换“打开系统浏览器”（macOS）
+  - 实现：
+    - `cmd/inspector-desktop` 新增 `--ui browser|webview|none`
+    - macOS（cgo）支持 `--ui webview` 内嵌窗口（依赖系统 WebKit）
+    - 打包脚本已默认在 macOS 安装器与 bundle 中使用 `--ui webview`
+  - 说明：
+    - Windows 仍默认使用打开系统浏览器（后续可在 Windows 环境启用 cgo 构建 WebView 版本）
 
 - [ ] 14. 安装器签名与发布链路
   - macOS：签名 + notarization
   - Windows：代码签名（减少 SmartScreen 拦截）
+  - 当前进度：
+    - 已在 `.github/workflows/build-installers.yml` 增加 tag（`v*`）自动创建 GitHub Release + 附件 + `SHA256SUMS.txt`
+    - 签名/公证仍需证书与 secrets 接入
 
-- [ ] 15. E2E 自动化（Playwright）：跑通“建案->采集->命中->导出->校验”的回归测试
+- [x] 15. E2E 自动化（Playwright）：跑通“建案->采集->命中->导出->校验”的回归测试
+  - 运行：
+    - `bash scripts/e2e.sh`
+  - 覆盖：
+    - UI 建案 -> 主机采集 -> 司法导出 ZIP -> `verify forensic-zip`
+  - CI：
+    - `.github/workflows/e2e.yml`
 
 ---
 

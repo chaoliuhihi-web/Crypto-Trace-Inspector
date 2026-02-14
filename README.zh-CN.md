@@ -31,7 +31,7 @@
 ## 目录结构（关键）
 
 - `cmd/inspector-cli/`：CLI（扫描、查询、导出、启动 Web）
-- `cmd/inspector-desktop/`：桌面启动器（启动 Web 并自动打开浏览器）
+- `cmd/inspector-desktop/`：桌面启动器（启动 Web 并自动打开 UI；macOS 可用 `--ui webview` 以内嵌窗口；Windows 默认系统浏览器）
 - `internal/services/webapp/`：Web UI + API（静态资源内嵌）
 - `internal/adapters/store/sqlite/`：SQLite 迁移与存储
 - `rules/`：规则模板（钱包/交易所）

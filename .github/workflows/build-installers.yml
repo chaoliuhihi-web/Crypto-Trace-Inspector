@@ -6,6 +6,9 @@ on:
     tags:
       - "v*"
 
+permissions:
+  contents: write
+
 jobs:
   macos:
     runs-on: macos-latest
@@ -87,3 +90,37 @@ jobs:
           path: |
             dist/installers/windows/*.exe
 
+  release:
+    # 仅在 tag（v*）触发时创建 GitHub Release；workflow_dispatch 只产出 artifacts。
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs:
+      - macos
+      - windows
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/release
+
+      - name: Prepare checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist/release
+          # 展平到一层，便于 release 附件展示
+          mkdir -p files
+          find . -type f \\( -name \"*.dmg\" -o -name \"*.pkg\" -o -name \"*.exe\" \\) -exec cp -f {} files/ \\;
+          cd files
+          ls -la
+          sha256sum * > SHA256SUMS.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            dist/release/files/*.dmg
+            dist/release/files/*.pkg
+            dist/release/files/*.exe
+            dist/release/files/SHA256SUMS.txt
