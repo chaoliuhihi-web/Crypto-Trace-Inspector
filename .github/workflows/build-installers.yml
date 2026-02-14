@@ -83,6 +83,13 @@ jobs:
           if (-not (Test-Path $iscc)) { throw "ISCC not found: $iscc" }
           & $iscc "/DMyAppVersion=$version" "installer\windows\crypto-trace-inspector.iss"
 
+      - name: Smoke test Windows installer (install/run/uninstall)
+        shell: powershell
+        run: |
+          $installer = Get-ChildItem -Path "dist\\installers\\windows" -Filter "*.exe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $installer) { throw "installer exe not found under dist\\installers\\windows" }
+          & "scripts\\windows\\installer_smoke_test.ps1" -InstallerPath $installer.FullName -InstallDir "${env:RUNNER_TEMP}\\CryptoTraceInspector-Install"
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:

@@ -116,6 +116,9 @@ func run(ctx context.Context, args []string) error {
 		case <-time.After(6 * time.Second):
 			return nil
 		}
+	case "none":
+		// 仅启动服务，不打开任何 UI（适合 CI 或希望手工访问 URL 的场景）。
+		return <-serverErrCh
 	default:
 		return fmt.Errorf("invalid --ui: %s (expected browser|webview|none)", *uiMode)
 	}

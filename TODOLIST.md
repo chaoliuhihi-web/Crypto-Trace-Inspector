@@ -148,6 +148,9 @@
 
 - [ ] V1. Windows 原生安装器（Inno Setup）在 Windows 真机安装/卸载验证
   - 覆盖：开始菜单快捷方式、默认数据目录（`%LOCALAPPDATA%\\Crypto-Trace-Inspector\\`）、升级覆盖
+  - 已补充：CI 冒烟测试（安装 -> 启动 `inspector-desktop --ui none` -> `/api/health` -> 卸载）
+    - 脚本：`scripts/windows/installer_smoke_test.ps1`
+    - 工作流：`.github/workflows/build-installers.yml`（Windows job）
 
 - [ ] V2. Android 真机采集覆盖（不同 ROM/浏览器/权限策略）
   - 覆盖：`adb` 授权、`pm list packages`、浏览历史 provider 可达性差异
