@@ -23,7 +23,8 @@
   - 司法导出包：ZIP（`manifest.json` + `hashes.sha256` + evidence/ + reports/ + rules/）
   - 取证 PDF：二进制产物，生成后在 UI 的“历史报告”下载
 - 链上余额查询（MVP）：
-  - EVM 原生币余额：`eth_getBalance`（用于快速核对，不会自动写入命中/证据链）
+  - 即时查询：EVM 原生币（`eth_getBalance`）、EVM ERC20（`balanceOf`）、BTC（HTTP API）
+  - 查询并留痕：写入 `chain_balance` artifact + `token_balance` 命中，进入证据链并可在司法导出包中追溯
 
 ## 目录结构（关键）
 
@@ -127,4 +128,3 @@ Windows（EXE 安装器，Inno Setup）：
 ## 使用边界（重要）
 
 本项目仅用于具备合法授权的取证/排查场景。移动端数据采集受设备授权、系统权限与工具链能力影响，不承诺在未授权情况下获取数据。
-

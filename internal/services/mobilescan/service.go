@@ -18,6 +18,7 @@ import (
 	"crypto-inspector/internal/domain/model"
 	"crypto-inspector/internal/platform/hash"
 	"crypto-inspector/internal/services/matcher"
+	"crypto-inspector/internal/services/privacy"
 
 	_ "modernc.org/sqlite"
 )
@@ -171,12 +172,13 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		CaseID:    caseID,
 		ScanScope: "general",
 		CheckCode: "privacy_mode_reserved",
-		CheckName: "隐私开关预留（当前仅记录，不做脱敏）",
+		CheckName: "隐私开关（masked 时对报告做展示层脱敏）",
 		Required:  false,
 		Status:    model.PrecheckPassed,
 		Message:   opts.PrivacyMode,
 		DetailJSON: mustJSON(map[string]any{
-			"implemented": false,
+			"implemented": true,
+			"note":        "masked 仅影响报告展示内容，不修改原始证据快照文件",
 		}),
 		CheckedAt: time.Now().Unix(),
 	})
@@ -432,6 +434,7 @@ func writeInternalJSONReport(dbPath, caseID, authOrder, privacyMode string, devi
 	if err := os.MkdirAll(reportDir, 0o755); err != nil {
 		return "", "", err
 	}
+	masked := strings.TrimSpace(strings.ToLower(privacyMode)) == "masked"
 
 	type deviceSummary struct {
 		DeviceID      string       `json:"device_id"`
@@ -468,17 +471,24 @@ func writeInternalJSONReport(dbPath, caseID, authOrder, privacyMode string, devi
 
 	artifactRows := make([]artifactSummary, 0, len(artifacts))
 	for _, a := range artifacts {
+		snap := a.SnapshotPath
+		if masked {
+			snap = privacy.MaskSnapshotPath(snap)
+		}
 		artifactRows = append(artifactRows, artifactSummary{
 			ArtifactID:   a.ID,
 			ArtifactType: string(a.Type),
 			SourceRef:    a.SourceRef,
-			SnapshotPath: a.SnapshotPath,
+			SnapshotPath: snap,
 			SHA256:       a.SHA256,
 			CollectedAt:  a.CollectedAt,
 			SizeBytes:    a.SizeBytes,
 		})
 	}
 
+	if masked {
+		hits = privacy.MaskRuleHitsForReport(hits)
+	}
 	payload := map[string]any{
 		"case_id":             caseID,
 		"authorization_order": authOrder,
@@ -519,6 +529,10 @@ func writeInternalHTMLReport(dbPath, caseID, authOrder, privacyMode string, devi
 	reportDir := filepath.Join(filepath.Dir(dbPath), "reports")
 	if err := os.MkdirAll(reportDir, 0o755); err != nil {
 		return "", "", err
+	}
+	masked := strings.TrimSpace(strings.ToLower(privacyMode)) == "masked"
+	if masked {
+		hits = privacy.MaskRuleHitsForReport(hits)
 	}
 
 	now := time.Now().Unix()
@@ -635,12 +649,16 @@ func writeInternalHTMLReport(dbPath, caseID, authOrder, privacyMode string, devi
 	} else {
 		b.WriteString("<table><thead><tr><th>artifact_id</th><th>type</th><th>source</th><th>sha256</th><th>snapshot_path</th><th>collected_at</th></tr></thead><tbody>")
 		for _, a := range artifacts {
+			snap := a.SnapshotPath
+			if masked {
+				snap = privacy.MaskSnapshotPath(snap)
+			}
 			b.WriteString("<tr>")
 			b.WriteString("<td class=\"mono\">" + htmlEscape(a.ID) + "</td>")
 			b.WriteString("<td class=\"mono\">" + htmlEscape(string(a.Type)) + "</td>")
 			b.WriteString("<td class=\"mono\">" + htmlEscape(a.SourceRef) + "</td>")
 			b.WriteString("<td class=\"mono\">" + htmlEscape(a.SHA256) + "</td>")
-			b.WriteString("<td class=\"mono\">" + htmlEscape(a.SnapshotPath) + "</td>")
+			b.WriteString("<td class=\"mono\">" + htmlEscape(snap) + "</td>")
 			b.WriteString("<td class=\"mono\">" + htmlEscape(time.Unix(a.CollectedAt, 0).Format("2006-01-02 15:04:05")) + "</td>")
 			b.WriteString("</tr>")
 		}

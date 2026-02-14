@@ -17,6 +17,7 @@ import type {
   ReportInfo,
   ScanAllJob,
   CaseChainBalancePersistResponse,
+  RulesListResponse,
 } from "./types";
 
 type ApiErrorBody = { error?: string };
@@ -47,6 +48,22 @@ async function requestJSON<T>(
 
 export const api = {
   getMeta: () => requestJSON<MetaResponse>("/api/meta"),
+
+  // 规则管理（最小实现：导入/切换/生效于下一次扫描）
+  listRules: () => requestJSON<RulesListResponse>("/api/rules"),
+  importRules: (payload: { kind: "wallet" | "exchange"; filename?: string; content: string }) =>
+    requestJSON<{ ok: boolean; kind: string; file: any }>(`/api/rules?action=import`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  activateRules: (payload: { wallet_path?: string; exchange_path?: string }) =>
+    requestJSON<{ ok: boolean; active: { wallet_path: string; exchange_path: string } }>(
+      `/api/rules?action=activate`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }
+    ),
 
   listCases: (limit = 50, offset = 0) =>
     requestJSON<{ cases: CaseSummary[] }>(

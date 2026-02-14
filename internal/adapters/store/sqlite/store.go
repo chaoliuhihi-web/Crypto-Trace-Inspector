@@ -68,6 +68,27 @@ func (s *Store) GetSchemaMetaValue(ctx context.Context, key string) (string, err
 	return v, nil
 }
 
+// UpsertSchemaMetaValue 写入/更新 schema_meta 表的 key/value。
+// 用于保存一些“运行时配置”（例如：当前启用的规则文件路径）。
+func (s *Store) UpsertSchemaMetaValue(ctx context.Context, key, value string) error {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return fmt.Errorf("schema_meta key is empty")
+	}
+	now := time.Now().Unix()
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO schema_meta(key, value, updated_at)
+		VALUES(?, ?, ?)
+		ON CONFLICT(key) DO UPDATE SET
+			value=excluded.value,
+			updated_at=excluded.updated_at
+	`, key, value, now)
+	if err != nil {
+		return fmt.Errorf("upsert schema_meta %s: %w", key, err)
+	}
+	return nil
+}
+
 // UpsertDeviceWithConnection 将设备写入案件设备表，可指定连接方式（local/usb）。
 func (s *Store) UpsertDeviceWithConnection(ctx context.Context, caseID string, d model.Device, connectionType string, authorized bool, authNote string) error {
 	now := time.Now().Unix()

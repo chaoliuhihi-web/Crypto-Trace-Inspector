@@ -490,12 +490,13 @@ func (s *Server) handleCaseExportForensicZip(w http.ResponseWriter, r *http.Requ
 		operator = "system"
 	}
 
+	walletRulePath, exchangeRulePath := s.activeRulePaths(r.Context())
 	res, err := forensicexport.GenerateForensicZip(r.Context(), s.store, forensicexport.ZipOptions{
 		CaseID:           caseID,
 		DBPath:           s.opts.DBPath,
 		EvidenceRoot:     s.opts.EvidenceRoot,
-		WalletRulePath:   s.opts.WalletRulePath,
-		ExchangeRulePath: s.opts.ExchangeRulePath,
+		WalletRulePath:   walletRulePath,
+		ExchangeRulePath: exchangeRulePath,
 		Operator:         operator,
 		Note:             strings.TrimSpace(req.Note),
 	})

@@ -180,6 +180,11 @@ func (s *Server) handleJobScanAll(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		ctx := context.Background()
 
+		// 每个 job 启动时读取一次“当前启用的规则文件路径”，保证：
+		// - UI 中导入/切换规则后，下一次扫描能立刻生效
+		// - 扫描过程内保持一致（避免中途切换导致同一次扫描前后规则不一致）
+		walletRulePath, exchangeRulePath := s.activeRulePaths(ctx)
+
 		// --- request defaults ---
 		enableHost := true
 		if req.EnableHost != nil {
@@ -226,8 +231,8 @@ func (s *Server) handleJobScanAll(w http.ResponseWriter, r *http.Request) {
 			hostRes, hostErr = hostscan.Run(ctx, hostscan.Options{
 				DBPath:             s.opts.DBPath,
 				EvidenceRoot:       s.opts.EvidenceRoot,
-				WalletRulePath:     s.opts.WalletRulePath,
-				ExchangeRulePath:   s.opts.ExchangeRulePath,
+				WalletRulePath:     walletRulePath,
+				ExchangeRulePath:   exchangeRulePath,
 				CaseID:             caseID,
 				Operator:           operator,
 				Note:               strings.TrimSpace(req.Note),
@@ -263,8 +268,8 @@ func (s *Server) handleJobScanAll(w http.ResponseWriter, r *http.Request) {
 				DBPath:              s.opts.DBPath,
 				EvidenceRoot:        s.opts.EvidenceRoot,
 				IOSBackupDir:        s.opts.IOSBackupDir,
-				WalletRulePath:      s.opts.WalletRulePath,
-				ExchangeRulePath:    s.opts.ExchangeRulePath,
+				WalletRulePath:      walletRulePath,
+				ExchangeRulePath:    exchangeRulePath,
 				CaseID:              caseID,
 				Operator:            operator,
 				Note:                strings.TrimSpace(req.Note),

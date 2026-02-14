@@ -104,6 +104,14 @@ type AppRecord struct {
 	Publisher       string `json:"publisher,omitempty"`
 	InstallLocation string `json:"install_location,omitempty"`
 	Path            string `json:"path,omitempty"`
+
+	// Windows 常见字段（来自注册表卸载项）
+	InstallDate     string `json:"install_date,omitempty"`     // 典型格式：YYYYMMDD（原始值）
+	UninstallString string `json:"uninstall_string,omitempty"` // 卸载命令（原始值）
+	DisplayIcon     string `json:"display_icon,omitempty"`     // 图标路径（原始值）
+
+	// macOS 常见字段（来自 .app/Contents/Info.plist）
+	BundleID string `json:"bundle_id,omitempty"` // CFBundleIdentifier
 }
 
 // ExtensionRecord 是浏览器扩展采集后的统一结构。
@@ -113,6 +121,7 @@ type ExtensionRecord struct {
 	ExtensionID string `json:"extension_id"`
 	Name        string `json:"name,omitempty"`
 	Version     string `json:"version,omitempty"`
+	Path        string `json:"path,omitempty"` // 扩展目录或扩展包路径（best effort）
 }
 
 // VisitRecord 是浏览历史采集后的统一结构。

@@ -81,13 +81,15 @@
 
 ## P1（重要：提升可用性与可信度）
 
-- [ ] 09. 主机采集增强：应用/扩展/历史字段补全 + “原始 DB 证据快照”
-  - Windows：InstallDate/UninstallString 等
-  - macOS：BundleID/版本号等
+- [x] 09. 主机采集增强：应用/扩展/历史字段补全 + “原始 DB 证据快照”
+  - Windows：InstallDate/UninstallString/DisplayIcon 等（注册表卸载项）
+  - macOS：BundleID/版本号等（解析 .app/Contents/Info.plist）
   - 浏览历史：把用于解析的 DB 副本也落盘为 artifact（证据更强）
+  - 浏览器扩展：补齐 manifest 名称/版本（Chrome/Edge 解析 manifest.json；Firefox 解析 extensions.json）
+  - 规则匹配增强（可选）：让 matcher 利用规则中的 install_paths_windows/macos 做 direct-match（当前未实现）
   - 当前进度：
     - 已完成：`browser_history_db` artifact（zip，包含 db + -wal/-shm）已落盘并进入导出/校验链路
-    - 待完成：Windows/macOS 应用字段补全、扩展字段补全
+    - 已完成：installed_apps/browser_extension 字段补齐（name/version/bundle_id/install_date/uninstall_string 等）
 
 - [x] 10. 审计链强校验：重算 chain_hash 并输出校验报告（不仅仅 prev_hash 连续）
   - 实现：
@@ -98,9 +100,19 @@
     - 单元测试覆盖：`internal/services/auditverify`
     - `go test ./...` PASS
 
-- [ ] 11. 隐私开关 masked 真正生效（仅对 external/profile 生效；内部默认 off）
+- [x] 11. 隐私开关 masked 生效（展示层脱敏）
+  - 实现范围（当前）：
+    - internal_json/internal_html 报告：对 `snapshot_path` 与敏感命中值做展示层脱敏（URL/地址）
+    - 不修改 artifacts 原始快照文件（授权人员仍可下载原始证据复核）
+  - 说明：
+    - masked 主要用于“对外分享/演示材料”；司法导出 ZIP/PDF 仍默认保留原始证据
 
-- [ ] 12. 规则管理（导入/启用禁用/版本切换）最小 UI
+- [x] 12. 规则管理最小 UI（导入/版本切换）
+  - 实现：
+    - API：`GET/POST /api/rules`（导入 YAML、切换 active 路径，写入 schema_meta）
+    - UI：在“04 规则匹配”页提供上传并启用、下拉切换
+  - 说明：
+    - 当前不做“单条规则启用/禁用”的在线编辑（可通过导入不同版本 YAML 实现）
 
 ---
 
@@ -113,3 +125,20 @@
   - Windows：代码签名（减少 SmartScreen 拦截）
 
 - [ ] 15. E2E 自动化（Playwright）：跑通“建案->采集->命中->导出->校验”的回归测试
+
+---
+
+## 验证项（不一定是代码缺失，但需要外部条件/设备覆盖）
+
+- [ ] V1. Windows 原生安装器（Inno Setup）在 Windows 真机安装/卸载验证
+  - 覆盖：开始菜单快捷方式、默认数据目录（`%LOCALAPPDATA%\\Crypto-Trace-Inspector\\`）、升级覆盖
+
+- [ ] V2. Android 真机采集覆盖（不同 ROM/浏览器/权限策略）
+  - 覆盖：`adb` 授权、`pm list packages`、浏览历史 provider 可达性差异
+  - 预期：不可达时必须落 `precheck=skipped` + 原因/尝试明细（不做绕过）
+
+- [ ] V3. iOS 真机备份解析覆盖（不同 iOS/加密备份差异）
+  - 覆盖：`libimobiledevice` 工具链、配对/信任、加密备份处理策略（不做绕过）
+
+- [ ] V4. 主机采集在“浏览器运行中/History DB 被锁”情况下的稳定性验证
+  - 覆盖：Chrome/Edge/Firefox/Safari 正在运行时仍可通过“复制 DB + wal/shm”读取到尽量完整的记录

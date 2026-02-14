@@ -366,7 +366,12 @@ export default function HitAnalysis() {
         </h3>
 
         <div className="text-xs text-[#7a7f8a] mb-3">
-          说明：本功能用于“快速核对地址余额”。内测阶段允许缺省使用公共数据源（不保证长期可用）。正式环境建议配置私有 RPC / 私有 BTC 节点网关。当前查询结果不会自动写入证据链（后续可扩展为：生成证据快照 + token_balance 命中）。
+          说明：本功能用于“快速核对地址余额”。内测阶段允许缺省使用公共数据源（不保证长期可用）。正式环境建议配置私有
+          RPC / 私有 BTC 节点网关。
+          <br />
+          - [查询余额]：仅查询，不写入案件
+          <br />
+          - [查询并留痕]：会写入证据链（生成 chain_balance artifact + token_balance 命中），并可在司法导出包中追溯
         </div>
 
         <div className="grid grid-cols-2 gap-6 mb-4">

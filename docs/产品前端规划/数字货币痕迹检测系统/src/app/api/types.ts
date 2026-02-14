@@ -204,6 +204,26 @@ export type ScanAllJob = {
   error?: string;
 };
 
+export type RuleFileInfo = {
+  path: string;
+  filename: string;
+  bundle_type: string;
+  version?: string;
+  sha256?: string;
+  active: boolean;
+};
+
+export type RulesListResponse = {
+  ok: boolean;
+  active: {
+    wallet_path: string;
+    exchange_path: string;
+  };
+  rules_dir: string;
+  wallet: RuleFileInfo[];
+  exchange: RuleFileInfo[];
+};
+
 // 链上余额查询（当前仅 EVM 原生币余额）
 export type ChainEVMBalancesResponse = {
   ok: boolean;

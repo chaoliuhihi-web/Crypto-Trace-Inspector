@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
-import type { HitDetail } from "../api/types";
+import type { HitDetail, RuleFileInfo, RulesListResponse } from "../api/types";
 import { useApp } from "../state/AppContext";
 
 function formatTime(ts: number) {
@@ -9,8 +9,17 @@ function formatTime(ts: number) {
 }
 
 export default function RuleMatching() {
-  const { meta, selectedCaseId } = useApp();
+  const { meta, selectedCaseId, refreshMeta } = useApp();
   const [hits, setHits] = useState<HitDetail[]>([]);
+
+  const [rules, setRules] = useState<RulesListResponse | null>(null);
+  const [rulesLoading, setRulesLoading] = useState<boolean>(false);
+  const [rulesErr, setRulesErr] = useState<string>("");
+  const [rulesMsg, setRulesMsg] = useState<string>("");
+  const [walletPath, setWalletPath] = useState<string>("");
+  const [exchangePath, setExchangePath] = useState<string>("");
+  const [walletUpload, setWalletUpload] = useState<File | null>(null);
+  const [exchangeUpload, setExchangeUpload] = useState<File | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -26,6 +35,75 @@ export default function RuleMatching() {
       }
     })();
   }, [selectedCaseId]);
+
+  const loadRules = async () => {
+    setRulesErr("");
+    setRulesMsg("");
+    setRulesLoading(true);
+    try {
+      const res = await api.listRules();
+      setRules(res);
+      setWalletPath(res.active.wallet_path || "");
+      setExchangePath(res.active.exchange_path || "");
+    } catch (e: any) {
+      setRules(null);
+      setRulesErr(e?.message || String(e));
+    } finally {
+      setRulesLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadRules();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const ruleLabel = (r: RuleFileInfo) => {
+    const v = (r.version || "").trim();
+    return `${r.filename}${v ? ` (v${v})` : ""}`;
+  };
+
+  const doActivate = async (kind: "wallet" | "exchange") => {
+    setRulesErr("");
+    setRulesMsg("");
+    setRulesLoading(true);
+    try {
+      if (kind === "wallet") {
+        await api.activateRules({ wallet_path: walletPath });
+      } else {
+        await api.activateRules({ exchange_path: exchangePath });
+      }
+      await refreshMeta();
+      await loadRules();
+      setRulesMsg("已启用（下一次扫描会使用新规则）。");
+    } catch (e: any) {
+      setRulesErr(e?.message || String(e));
+    } finally {
+      setRulesLoading(false);
+    }
+  };
+
+  const doImport = async (kind: "wallet" | "exchange") => {
+    setRulesErr("");
+    setRulesMsg("");
+    const f = kind === "wallet" ? walletUpload : exchangeUpload;
+    if (!f) {
+      setRulesErr("请选择要上传的规则 YAML 文件。");
+      return;
+    }
+    setRulesLoading(true);
+    try {
+      const content = await f.text();
+      await api.importRules({ kind, filename: f.name, content });
+      await refreshMeta();
+      await loadRules();
+      setRulesMsg("上传并启用成功（下一次扫描会使用新规则）。");
+    } catch (e: any) {
+      setRulesErr(e?.message || String(e));
+    } finally {
+      setRulesLoading(false);
+    }
+  };
 
   const walletHits = hits.filter((h) => h.hit_type === "wallet_installed");
   const exchangeHits = hits.filter((h) => h.hit_type === "exchange_visited");
@@ -106,6 +184,116 @@ export default function RuleMatching() {
         </div>
       </div>
 
+      {/* 规则管理（导入/切换） */}
+      <div className="bg-[#1e2127]/80 backdrop-blur-sm border border-[#3a3f4a] rounded p-4 mb-6 shadow-lg">
+        <h3 className="text-sm font-bold text-[#4fc3f7] mb-4">规则管理（导入/切换）</h3>
+
+        <div className="text-xs text-[#7a7f8a] mb-3">
+          说明：规则文件保存在本机 <span className="text-[#4fc3f7] font-mono">{rules?.rules_dir || "-"}</span>。
+          <br />
+          切换规则不会影响已生成的历史命中与证据链；只会影响“下一次采集/匹配”。
+        </div>
+
+        {rulesErr ? (
+          <div className="text-xs text-[#ff6b6b] mb-2">ERROR: {rulesErr}</div>
+        ) : null}
+        {rulesMsg ? (
+          <div className="text-xs text-green-500 mb-2">{rulesMsg}</div>
+        ) : null}
+
+        <div className="grid grid-cols-2 gap-6">
+          {/* Wallet rules */}
+          <div className="bg-[#252931] border border-[#3a3f4a] rounded p-3">
+            <div className="text-xs text-[#b8bcc4] mb-2">钱包规则（wallet_signatures）</div>
+
+            <div className="flex items-center gap-2 mb-2">
+              <select
+                value={walletPath}
+                onChange={(e) => setWalletPath(e.target.value)}
+                className="flex-1 bg-[#1e2127] border border-[#3a3f4a] rounded px-2 py-1 text-xs text-[#e8e8e8] focus:outline-none focus:border-[#4fc3f7]"
+              >
+                {(rules?.wallet || []).map((r) => (
+                  <option key={r.path} value={r.path}>
+                    {r.active ? `* ${ruleLabel(r)}` : ruleLabel(r)}
+                  </option>
+                ))}
+              </select>
+              <button
+                disabled={rulesLoading || !walletPath}
+                onClick={() => doActivate("wallet")}
+                className="bg-[#2b5278] hover:bg-[#365f8a] disabled:opacity-50 border border-[#4fc3f7] text-[#4fc3f7] px-3 py-1 text-xs rounded transition-colors"
+              >
+                [启用]
+              </button>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <input
+                type="file"
+                accept=".yaml,.yml"
+                onChange={(e) => setWalletUpload(e.target.files?.[0] || null)}
+                className="flex-1 text-xs text-[#b8bcc4]"
+              />
+              <button
+                disabled={rulesLoading}
+                onClick={() => doImport("wallet")}
+                className="bg-[#1e2127] hover:bg-[#252931] disabled:opacity-50 border border-[#5a5f6a] text-[#b8bcc4] px-3 py-1 text-xs rounded transition-colors"
+              >
+                [上传并启用]
+              </button>
+            </div>
+          </div>
+
+          {/* Exchange rules */}
+          <div className="bg-[#252931] border border-[#3a3f4a] rounded p-3">
+            <div className="text-xs text-[#b8bcc4] mb-2">交易所规则（exchange_domains）</div>
+
+            <div className="flex items-center gap-2 mb-2">
+              <select
+                value={exchangePath}
+                onChange={(e) => setExchangePath(e.target.value)}
+                className="flex-1 bg-[#1e2127] border border-[#3a3f4a] rounded px-2 py-1 text-xs text-[#e8e8e8] focus:outline-none focus:border-[#4fc3f7]"
+              >
+                {(rules?.exchange || []).map((r) => (
+                  <option key={r.path} value={r.path}>
+                    {r.active ? `* ${ruleLabel(r)}` : ruleLabel(r)}
+                  </option>
+                ))}
+              </select>
+              <button
+                disabled={rulesLoading || !exchangePath}
+                onClick={() => doActivate("exchange")}
+                className="bg-[#2b5278] hover:bg-[#365f8a] disabled:opacity-50 border border-[#4fc3f7] text-[#4fc3f7] px-3 py-1 text-xs rounded transition-colors"
+              >
+                [启用]
+              </button>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <input
+                type="file"
+                accept=".yaml,.yml"
+                onChange={(e) => setExchangeUpload(e.target.files?.[0] || null)}
+                className="flex-1 text-xs text-[#b8bcc4]"
+              />
+              <button
+                disabled={rulesLoading}
+                onClick={() => doImport("exchange")}
+                className="bg-[#1e2127] hover:bg-[#252931] disabled:opacity-50 border border-[#5a5f6a] text-[#b8bcc4] px-3 py-1 text-xs rounded transition-colors"
+              >
+                [上传并启用]
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-3 text-[10px] text-[#7a7f8a] font-mono break-all">
+          active wallet: {rules?.active?.wallet_path || "-"}
+          <br />
+          active exchange: {rules?.active?.exchange_path || "-"}
+        </div>
+      </div>
+
       {/* 规则匹配摘要 */}
       <div className="bg-[#1e2127]/80 backdrop-blur-sm border border-[#3a3f4a] rounded p-4 mb-6 shadow-lg">
         <h3 className="text-sm font-bold text-[#4fc3f7] mb-4">规则匹配摘要</h3>
@@ -179,4 +367,3 @@ export default function RuleMatching() {
     </div>
   );
 }
-

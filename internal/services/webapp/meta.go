@@ -18,7 +18,8 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 	schemaVersion, _ := s.store.GetSchemaMetaValue(r.Context(), "schema_version")
 	schemaName, _ := s.store.GetSchemaMetaValue(r.Context(), "schema_name")
 
-	loader := rules.NewLoader(s.opts.WalletRulePath, s.opts.ExchangeRulePath)
+	walletPath, exchangePath := s.activeRulePaths(r.Context())
+	loader := rules.NewLoader(walletPath, exchangePath)
 	loaded, err := loader.Load(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
@@ -40,14 +41,14 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 		},
 		"rules": map[string]any{
 			"wallet": map[string]any{
-				"path":    s.opts.WalletRulePath,
+				"path":    walletPath,
 				"version": loaded.Wallet.Version,
 				"total":   len(loaded.Wallet.Wallets),
 				"enabled": countEnabledWallets(loaded.Wallet.Wallets),
 				"sha256":  loaded.WalletSHA256,
 			},
 			"exchange": map[string]any{
-				"path":    s.opts.ExchangeRulePath,
+				"path":    exchangePath,
 				"version": loaded.Exchange.Version,
 				"total":   len(loaded.Exchange.Exchanges),
 				"enabled": countEnabledExchanges(loaded.Exchange.Exchanges),

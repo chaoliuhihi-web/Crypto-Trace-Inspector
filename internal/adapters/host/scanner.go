@@ -2,6 +2,7 @@ package host
 
 import (
 	"archive/zip"
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -14,6 +15,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -21,6 +23,7 @@ import (
 	"crypto-inspector/internal/platform/hash"
 	"crypto-inspector/internal/platform/id"
 
+	"howett.net/plist"
 	_ "modernc.org/sqlite"
 )
 
@@ -502,7 +505,7 @@ $paths = @(
 )
 Get-ItemProperty $paths |
   Where-Object { $_.DisplayName } |
-  Select-Object DisplayName,DisplayVersion,Publisher,InstallLocation |
+  Select-Object DisplayName,DisplayVersion,Publisher,InstallLocation,InstallDate,UninstallString,DisplayIcon |
   ConvertTo-Json -Depth 3
 `)
 	out, err := cmd.Output()
@@ -515,6 +518,9 @@ Get-ItemProperty $paths |
 		DisplayVersion  string `json:"DisplayVersion"`
 		Publisher       string `json:"Publisher"`
 		InstallLocation string `json:"InstallLocation"`
+		InstallDate     string `json:"InstallDate"`
+		UninstallString string `json:"UninstallString"`
+		DisplayIcon     string `json:"DisplayIcon"`
 	}
 
 	var many []row
@@ -533,6 +539,9 @@ Get-ItemProperty $paths |
 			Version:         strings.TrimSpace(item.DisplayVersion),
 			Publisher:       strings.TrimSpace(item.Publisher),
 			InstallLocation: strings.TrimSpace(item.InstallLocation),
+			InstallDate:     strings.TrimSpace(item.InstallDate),
+			UninstallString: strings.TrimSpace(item.UninstallString),
+			DisplayIcon:     strings.TrimSpace(item.DisplayIcon),
 		})
 	}
 	return dedupeApps(apps), nil
@@ -556,13 +565,28 @@ func collectMacInstalledApps() ([]model.AppRecord, error) {
 			if !entry.IsDir() || !strings.HasSuffix(strings.ToLower(entry.Name()), ".app") {
 				continue
 			}
-			name := strings.TrimSuffix(entry.Name(), ".app")
-			key := strings.ToLower(name)
+			appPath := filepath.Join(root, entry.Name())
+			info := readMacAppInfo(appPath)
+			name := strings.TrimSpace(info.Name)
+			if name == "" {
+				name = strings.TrimSuffix(entry.Name(), ".app")
+			}
+
+			// 优先使用 bundle_id 去重（更稳定）；否则退化到应用名。
+			key := strings.ToLower(strings.TrimSpace(info.BundleID))
+			if key == "" {
+				key = strings.ToLower(name)
+			}
 			if _, ok := seen[key]; ok {
 				continue
 			}
 			seen[key] = struct{}{}
-			apps = append(apps, model.AppRecord{Name: name, Path: filepath.Join(root, entry.Name())})
+			apps = append(apps, model.AppRecord{
+				Name:     name,
+				Version:  strings.TrimSpace(info.Version),
+				BundleID: strings.TrimSpace(info.BundleID),
+				Path:     appPath,
+			})
 		}
 	}
 
@@ -570,6 +594,48 @@ func collectMacInstalledApps() ([]model.AppRecord, error) {
 		return strings.ToLower(apps[i].Name) < strings.ToLower(apps[j].Name)
 	})
 	return apps, nil
+}
+
+type macAppInfo struct {
+	Name     string
+	BundleID string
+	Version  string
+}
+
+// readMacAppInfo 从 .app 的 Info.plist 中读取 bundle id 与版本信息（best effort）。
+func readMacAppInfo(appPath string) macAppInfo {
+	infoPlist := filepath.Join(appPath, "Contents", "Info.plist")
+	raw, err := os.ReadFile(infoPlist)
+	if err != nil || len(raw) == 0 {
+		return macAppInfo{}
+	}
+
+	// Info.plist 可能是 XML 也可能是二进制 plist；howett.net/plist 两者都支持。
+	var p struct {
+		CFBundleDisplayName        string `plist:"CFBundleDisplayName"`
+		CFBundleName               string `plist:"CFBundleName"`
+		CFBundleIdentifier         string `plist:"CFBundleIdentifier"`
+		CFBundleShortVersionString string `plist:"CFBundleShortVersionString"`
+		CFBundleVersion            string `plist:"CFBundleVersion"`
+	}
+	if _, err := plist.Unmarshal(raw, &p); err != nil {
+		return macAppInfo{}
+	}
+
+	name := strings.TrimSpace(p.CFBundleDisplayName)
+	if name == "" {
+		name = strings.TrimSpace(p.CFBundleName)
+	}
+	ver := strings.TrimSpace(p.CFBundleShortVersionString)
+	if ver == "" {
+		ver = strings.TrimSpace(p.CFBundleVersion)
+	}
+
+	return macAppInfo{
+		Name:     name,
+		BundleID: strings.TrimSpace(p.CFBundleIdentifier),
+		Version:  ver,
+	}
 }
 
 // collectWindowsExtensions 扫描 Chrome/Edge/Firefox 扩展目录。
@@ -625,10 +691,15 @@ func scanChromiumExtensions(root, browser string) []model.ExtensionRecord {
 				break
 			}
 		}
+
+		name, version := readChromiumExtensionManifest(m)
 		out = append(out, model.ExtensionRecord{
 			Browser:     browser,
 			Profile:     profile,
 			ExtensionID: strings.TrimSpace(extID),
+			Name:        name,
+			Version:     version,
+			Path:        m,
 		})
 	}
 	return out
@@ -636,24 +707,266 @@ func scanChromiumExtensions(root, browser string) []model.ExtensionRecord {
 
 // scanFirefoxExtensions 扫描 Firefox 扩展目录并提取 profile 信息。
 func scanFirefoxExtensions(profileRoot string) []model.ExtensionRecord {
-	pattern := filepath.Join(profileRoot, "*", "extensions", "*")
-	matches, _ := filepath.Glob(pattern)
-	out := make([]model.ExtensionRecord, 0, len(matches))
+	// Firefox 的真实扩展信息（id/name/version/active）优先来自 extensions.json。
+	// 该文件位于 profile 根目录，结构稳定且无需解压 xpi。
+	profiles, _ := filepath.Glob(filepath.Join(profileRoot, "*"))
+	var out []model.ExtensionRecord
 
-	for _, m := range matches {
-		name := strings.TrimSpace(filepath.Base(m))
-		if name == "" {
+	for _, p := range profiles {
+		fi, err := os.Stat(p)
+		if err != nil || !fi.IsDir() {
 			continue
 		}
-		profile := filepath.Base(filepath.Dir(filepath.Dir(m)))
-		out = append(out, model.ExtensionRecord{
-			Browser:     "firefox",
-			Profile:     profile,
-			ExtensionID: strings.TrimSuffix(name, filepath.Ext(name)),
-			Name:        name,
+		profile := filepath.Base(p)
+		extJSON := filepath.Join(p, "extensions.json")
+		raw, err := os.ReadFile(extJSON)
+		if err == nil && len(bytes.TrimSpace(raw)) > 0 {
+			type addonLocale struct {
+				Name string `json:"name"`
+			}
+			type addon struct {
+				ID            string      `json:"id"`
+				Version       string      `json:"version"`
+				Type          string      `json:"type"`
+				Active        bool        `json:"active"`
+				DefaultLocale addonLocale `json:"defaultLocale"`
+				Path          string      `json:"path"`
+			}
+			var payload struct {
+				Addons []addon `json:"addons"`
+			}
+			if err := json.Unmarshal(raw, &payload); err == nil && len(payload.Addons) > 0 {
+				for _, a := range payload.Addons {
+					id := strings.TrimSpace(a.ID)
+					if id == "" {
+						continue
+					}
+					// 只保留“扩展”类型，减少噪音（theme/locale 等可按需再加）。
+					if strings.TrimSpace(a.Type) != "" && strings.ToLower(strings.TrimSpace(a.Type)) != "extension" {
+						continue
+					}
+					out = append(out, model.ExtensionRecord{
+						Browser:     "firefox",
+						Profile:     profile,
+						ExtensionID: id,
+						Name:        strings.TrimSpace(a.DefaultLocale.Name),
+						Version:     strings.TrimSpace(a.Version),
+						Path:        strings.TrimSpace(a.Path),
+					})
+				}
+				// 当前 profile 已成功解析，不再做目录 fallback。
+				continue
+			}
+		}
+
+		// fallback：旧版本/异常情况下尝试扫描 extensions 目录（只能拿到文件名，信息较弱）。
+		pattern := filepath.Join(p, "extensions", "*")
+		matches, _ := filepath.Glob(pattern)
+		for _, m := range matches {
+			name := strings.TrimSpace(filepath.Base(m))
+			if name == "" {
+				continue
+			}
+			out = append(out, model.ExtensionRecord{
+				Browser:     "firefox",
+				Profile:     profile,
+				ExtensionID: strings.TrimSuffix(name, filepath.Ext(name)),
+				Name:        name,
+				Path:        m,
+			})
+		}
+	}
+
+	return out
+}
+
+// readChromiumExtensionManifest 从扩展目录读取 manifest.json（best effort）并返回 name/version。
+//
+// 目录结构（典型）：
+//
+//	.../Extensions/<extensionID>/<version>/manifest.json
+func readChromiumExtensionManifest(extDir string) (name, version string) {
+	verDir := pickLatestChromiumExtVersionDir(extDir)
+	if verDir == "" {
+		return "", ""
+	}
+	manifestPath := filepath.Join(verDir, "manifest.json")
+	raw, err := os.ReadFile(manifestPath)
+	if err != nil || len(bytes.TrimSpace(raw)) == 0 {
+		return "", ""
+	}
+
+	var m struct {
+		Name          string `json:"name"`
+		ShortName     string `json:"short_name"`
+		Version       string `json:"version"`
+		DefaultLocale string `json:"default_locale"`
+	}
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return "", ""
+	}
+
+	name = strings.TrimSpace(m.Name)
+	if name == "" {
+		name = strings.TrimSpace(m.ShortName)
+	}
+	version = strings.TrimSpace(m.Version)
+
+	// __MSG_xxx__ 本地化占位符解析（best effort）
+	if strings.HasPrefix(name, "__MSG_") && strings.HasSuffix(name, "__") {
+		key := strings.TrimSuffix(strings.TrimPrefix(name, "__MSG_"), "__")
+		if resolved := lookupChromiumLocaleMessage(verDir, m.DefaultLocale, key); resolved != "" {
+			name = resolved
+		}
+	}
+
+	return name, version
+}
+
+func pickLatestChromiumExtVersionDir(extDir string) string {
+	entries, err := os.ReadDir(extDir)
+	if err != nil {
+		return ""
+	}
+
+	type candidate struct {
+		name    string
+		path    string
+		parts   []int
+		modTime time.Time
+	}
+	var cands []candidate
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		n := strings.TrimSpace(e.Name())
+		if n == "" || strings.HasPrefix(n, ".") {
+			continue
+		}
+		fi, _ := e.Info()
+		cands = append(cands, candidate{
+			name:  n,
+			path:  filepath.Join(extDir, n),
+			parts: parseVersionParts(n),
+			modTime: func() time.Time {
+				if fi != nil {
+					return fi.ModTime()
+				}
+				return time.Time{}
+			}(),
 		})
 	}
+	if len(cands) == 0 {
+		return ""
+	}
+	sort.Slice(cands, func(i, j int) bool {
+		// 优先按版本号各段比较（语义化-ish）；无法解析时退化到修改时间/字符串比较。
+		pi, pj := cands[i].parts, cands[j].parts
+		if len(pi) > 0 && len(pj) > 0 {
+			max := len(pi)
+			if len(pj) > max {
+				max = len(pj)
+			}
+			for k := 0; k < max; k++ {
+				ai, aj := 0, 0
+				if k < len(pi) {
+					ai = pi[k]
+				}
+				if k < len(pj) {
+					aj = pj[k]
+				}
+				if ai != aj {
+					return ai > aj
+				}
+			}
+		}
+		if !cands[i].modTime.Equal(cands[j].modTime) && !cands[i].modTime.IsZero() && !cands[j].modTime.IsZero() {
+			return cands[i].modTime.After(cands[j].modTime)
+		}
+		return cands[i].name > cands[j].name
+	})
+	return cands[0].path
+}
+
+func parseVersionParts(v string) []int {
+	parts := strings.Split(v, ".")
+	out := make([]int, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		iv, err := strconv.Atoi(p)
+		if err != nil {
+			// 有非数字段时直接放弃解析（避免误判）
+			return nil
+		}
+		out = append(out, iv)
+	}
 	return out
+}
+
+// lookupChromiumLocaleMessage 从 _locales/*/messages.json 中解析 __MSG_xxx__。
+func lookupChromiumLocaleMessage(extVersionDir, defaultLocale, key string) string {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return ""
+	}
+	keyLower := strings.ToLower(key)
+
+	localesRoot := filepath.Join(extVersionDir, "_locales")
+	if _, err := os.Stat(localesRoot); err != nil {
+		return ""
+	}
+
+	tryLocales := []string{}
+	if strings.TrimSpace(defaultLocale) != "" {
+		tryLocales = append(tryLocales, strings.TrimSpace(defaultLocale))
+	}
+	tryLocales = append(tryLocales, "en", "en_US", "zh_CN", "zh-CN", "zh")
+
+	// 最后兜底：枚举目录任取一个（保证“尽量有名字”）
+	entries, _ := os.ReadDir(localesRoot)
+	for _, e := range entries {
+		if e.IsDir() {
+			tryLocales = append(tryLocales, e.Name())
+		}
+	}
+
+	seen := map[string]struct{}{}
+	for _, loc := range tryLocales {
+		loc = strings.TrimSpace(loc)
+		if loc == "" {
+			continue
+		}
+		if _, ok := seen[loc]; ok {
+			continue
+		}
+		seen[loc] = struct{}{}
+
+		msgPath := filepath.Join(localesRoot, loc, "messages.json")
+		raw, err := os.ReadFile(msgPath)
+		if err != nil {
+			continue
+		}
+		var m map[string]struct {
+			Message string `json:"message"`
+		}
+		if err := json.Unmarshal(raw, &m); err != nil {
+			continue
+		}
+		if v, ok := m[key]; ok {
+			return strings.TrimSpace(v.Message)
+		}
+		if keyLower != "" {
+			if v, ok := m[keyLower]; ok {
+				return strings.TrimSpace(v.Message)
+			}
+		}
+	}
+
+	return ""
 }
 
 // collectWindowsHistory 采集 Windows 下 Chrome/Edge/Firefox 历史。
