@@ -132,6 +132,7 @@
   - 当前进度：
     - 已在 `.github/workflows/build-installers.yml` 增加 tag（`v*`）自动创建 GitHub Release + 附件 + `SHA256SUMS.txt`
     - 签名/公证仍需证书与 secrets 接入
+    - `scripts/package_macos_installer.sh` 已支持可选 codesign/notarytool（见 `docs/发布与签名.md`）
 
 - [x] 15. E2E 自动化（Playwright）：跑通“建案->采集->命中->导出->校验”的回归测试
   - 运行：

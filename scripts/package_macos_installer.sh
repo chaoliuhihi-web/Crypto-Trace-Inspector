@@ -148,6 +148,18 @@ if [ -f "docs/体验部署.md" ]; then
   cp "docs/体验部署.md" "$APP_DIR/Contents/Resources/README_DEPLOY.md"
 fi
 
+if [ -n "${MACOS_CODESIGN_IDENTITY:-}" ]; then
+  if ! command -v codesign >/dev/null 2>&1; then
+    echo "codesign not found (Xcode Command Line Tools required)" >&2
+    exit 1
+  fi
+  echo "[3.5/5] codesign .app bundle (optional)"
+  # 先签内置二进制，再签整个 App（--deep 处理嵌套资源）。
+  codesign --force --timestamp --options runtime --sign "$MACOS_CODESIGN_IDENTITY" "$APP_DIR/Contents/Resources/inspector-desktop"
+  codesign --force --timestamp --options runtime --sign "$MACOS_CODESIGN_IDENTITY" "$APP_DIR/Contents/Resources/inspector"
+  codesign --force --timestamp --options runtime --deep --sign "$MACOS_CODESIGN_IDENTITY" "$APP_DIR"
+fi
+
 echo "[4/5] create DMG (drag-to-install)"
 DMG_TMP="$WORK_DIR/dmgroot"
 mkdir -p "$DMG_TMP"
@@ -165,12 +177,34 @@ cp -R "$APP_DIR" "$PKG_ROOT/Applications/"
 
 PKG_PATH="$OUT_DIR/${APP_NAME}-${VERSION}-macos-universal.pkg"
 rm -f "$PKG_PATH"
-pkgbuild \
-  --root "$PKG_ROOT" \
-  --install-location "/" \
-  --identifier "$BUNDLE_ID" \
-  --version "$VERSION" \
-  "$PKG_PATH" >/dev/null
+if [ -n "${MACOS_PKG_SIGN_IDENTITY:-}" ]; then
+  pkgbuild \
+    --root "$PKG_ROOT" \
+    --install-location "/" \
+    --identifier "$BUNDLE_ID" \
+    --version "$VERSION" \
+    --sign "$MACOS_PKG_SIGN_IDENTITY" \
+    "$PKG_PATH" >/dev/null
+else
+  pkgbuild \
+    --root "$PKG_ROOT" \
+    --install-location "/" \
+    --identifier "$BUNDLE_ID" \
+    --version "$VERSION" \
+    "$PKG_PATH" >/dev/null
+fi
+
+if [ -n "${MACOS_NOTARY_KEYCHAIN_PROFILE:-}" ]; then
+  if ! command -v xcrun >/dev/null 2>&1; then
+    echo "xcrun not found (Xcode Command Line Tools required)" >&2
+    exit 1
+  fi
+  echo "[optional] notarize DMG/PKG (notarytool)"
+  xcrun notarytool submit "$DMG_PATH" --keychain-profile "$MACOS_NOTARY_KEYCHAIN_PROFILE" --wait
+  xcrun stapler staple "$DMG_PATH" || true
+  xcrun notarytool submit "$PKG_PATH" --keychain-profile "$MACOS_NOTARY_KEYCHAIN_PROFILE" --wait
+  xcrun stapler staple "$PKG_PATH" || true
+fi
 
 echo "macOS installers ready:"
 echo "  app: $APP_DIR"
