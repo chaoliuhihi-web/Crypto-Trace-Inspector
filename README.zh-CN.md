@@ -16,6 +16,8 @@
 - 规则匹配：
   - 钱包：浏览器扩展 ID、应用关键词（置信度/判定）
   - 交易所：访问域名/URL 关键词
+- 规则管理（最小）：
+  - Web UI 支持上传并启用规则 YAML、切换 active 规则路径（下一次扫描生效）
 - 证据链与可追溯：
   - 每条证据落盘快照（`snapshot_path`）+ `sha256` + `record_hash`
   - 审计日志链式 hash（`chain_prev_hash` / `chain_hash`）
