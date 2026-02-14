@@ -10,17 +10,16 @@
 
 ## P0（必须完成：形成闭环，能交付内测）
 
-- [ ] 01. 移动端“交易所访问”检测（iOS 优先，Android best effort）
+- [x] 01. 移动端“交易所访问”检测（iOS 优先，Android best effort）
   - 实现：
-    - iOS：从 iOS 备份中提取 Safari/Chrome 等浏览痕迹（可解析为 `browser_history` artifact 或新增移动端浏览 artifact），匹配交易所域名规则并写入 `exchange_visited` 命中。
-    - Android：尝试从可访问的数据源提取（例如 root 可读路径 / 某些机型可用的 content provider），否则写入 precheck=skipped 并输出原因。
+    - iOS：从 iOS 备份中提取 Safari/Chrome 浏览痕迹 -> 生成 `browser_history` artifact -> 匹配交易所域名规则并写入 `exchange_visited` 命中（best effort；不做破解/绕过）。
+    - Android：通过 `adb shell content query` 尝试读取可达的浏览 provider（best effort）；不可达时写入 `precheck=skipped` 并记录尝试细节/原因（UI 可见）。
   - 验证：
-    - iOS：插入设备 -> 允许信任/备份 -> 扫描后命中至少 1 个交易所域名（可用测试数据）。
-    - Android：未授权/不可达时，UI 能看到 “skipped/unsupported” 的明确原因。
+    - iOS：单元测试覆盖（Manifest.db + History.db 合成备份目录），并在移动端 matcher 中可生成 `exchange_visited` 命中。
+    - Android：单元/集成层面验证“不可达 -> precheck=skipped 且 reason 可见”；真机上若 provider 可用则可落 `browser_history` artifact。
   - 当前进度：
-    - 已实现 iOS 备份后解析 Safari `History.db` -> 生成 `browser_history` artifact（best effort）
-    - 已在 mobile matcher 中接入 `browser_history` -> 生成 `exchange_visited` 命中（需真机/备份验证）
-    - Android 浏览历史采集仍未实现（保持 best effort / skipped）
+    - iOS：Safari/Chrome 备份解析已实现并新增单测
+    - Android：浏览历史 best effort 采集已实现（content provider 尝试 + precheck 留痕）
 
 - [x] 02. 链上余额：满足“BTC/USDT/ETH 数量”最小可用
   - 实现：
@@ -86,8 +85,18 @@
   - Windows：InstallDate/UninstallString 等
   - macOS：BundleID/版本号等
   - 浏览历史：把用于解析的 DB 副本也落盘为 artifact（证据更强）
+  - 当前进度：
+    - 已完成：`browser_history_db` artifact（zip，包含 db + -wal/-shm）已落盘并进入导出/校验链路
+    - 待完成：Windows/macOS 应用字段补全、扩展字段补全
 
-- [ ] 10. 审计链强校验：重算 chain_hash 并输出校验报告（不仅仅 prev_hash 连续）
+- [x] 10. 审计链强校验：重算 chain_hash 并输出校验报告（不仅仅 prev_hash 连续）
+  - 实现：
+    - 后端 API：`POST /api/cases/{case_id}/verify/audits` 返回强校验结果（并写入一条 verify 审计记录）
+    - CLI：`inspector-cli verify audits --case-id ...`（DB 内审计链强校验）
+    - CLI：`inspector-cli verify forensic-zip --zip ...` 增强：若 zip 内包含 `manifest.json`，会对 manifest.audits 做强校验
+  - 验证：
+    - 单元测试覆盖：`internal/services/auditverify`
+    - `go test ./...` PASS
 
 - [ ] 11. 隐私开关 masked 真正生效（仅对 external/profile 生效；内部默认 off）
 

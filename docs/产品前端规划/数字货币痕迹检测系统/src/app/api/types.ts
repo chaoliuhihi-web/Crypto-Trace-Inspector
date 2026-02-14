@@ -262,6 +262,33 @@ export type CaseArtifactVerifyResponse = {
   results: ArtifactVerifyItem[];
 };
 
+export type AuditVerifyFailure = {
+  index: number;
+  event_id: string;
+  occurred_at: number;
+  event_type: string;
+  action: string;
+  status: string;
+  prev_hash_mismatch: boolean;
+  expected_prev_hash?: string;
+  actual_prev_hash?: string;
+  chain_hash_mismatch: boolean;
+  expected_chain_hash?: string;
+  actual_chain_hash?: string;
+  message?: string;
+};
+
+export type CaseAuditVerifyResponse = {
+  ok: boolean;
+  case_id: string;
+  total: number;
+  failed: number;
+  prev_hash_failed: number;
+  chain_hash_failed: number;
+  last_chain_hash?: string;
+  failures: AuditVerifyFailure[];
+};
+
 // 案件链上余额查询（查询并落库为证据 + token_balance 命中）
 export type CaseChainBalancePersistResponse = {
   ok: boolean;

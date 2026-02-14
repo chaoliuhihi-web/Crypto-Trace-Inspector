@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -15,7 +16,9 @@ import (
 
 	sqliteadapter "crypto-inspector/internal/adapters/store/sqlite"
 	"crypto-inspector/internal/app"
+	"crypto-inspector/internal/domain/model"
 	"crypto-inspector/internal/platform/hash"
+	"crypto-inspector/internal/services/auditverify"
 
 	_ "modernc.org/sqlite"
 )
@@ -34,6 +37,8 @@ func runVerify(ctx context.Context, args []string) error {
 		return runVerifyForensicZip(ctx, args[1:])
 	case "artifacts":
 		return runVerifyArtifacts(ctx, args[1:])
+	case "audits":
+		return runVerifyAudits(ctx, args[1:])
 	default:
 		printVerifyUsage()
 		return fmt.Errorf("unknown verify command: %s", args[0])
@@ -44,6 +49,7 @@ func printVerifyUsage() {
 	fmt.Println("Usage:")
 	fmt.Println("  inspector-cli verify forensic-zip --zip PATH_TO_ZIP")
 	fmt.Println("  inspector-cli verify artifacts --case-id CASE_ID [--db data/inspector.db] [--artifact-id ART_ID]")
+	fmt.Println("  inspector-cli verify audits --case-id CASE_ID [--db data/inspector.db] [--limit 5000]")
 }
 
 type zipVerifyItem struct {
@@ -66,7 +72,7 @@ func runVerifyForensicZip(ctx context.Context, args []string) error {
 		return fmt.Errorf("--zip is required")
 	}
 
-	total, okCount, failedCount, items, err := verifyForensicZip(*zipPath)
+	total, okCount, failedCount, items, auditRes, err := verifyForensicZip(*zipPath)
 	if err != nil {
 		return err
 	}
@@ -88,13 +94,25 @@ func runVerifyForensicZip(ctx context.Context, args []string) error {
 		}
 		return fmt.Errorf("forensic zip verify failed: %d files mismatch/missing", failedCount)
 	}
+
+	if auditRes != nil {
+		fmt.Printf("audit_chain_total=%d failed=%d prev_hash_failed=%d chain_hash_failed=%d\n", auditRes.Total, auditRes.Failed, auditRes.PrevHashFailed, auditRes.ChainHashFailed)
+		if !auditRes.OK {
+			for _, f := range auditRes.Failures {
+				fmt.Printf("FAIL audit_chain index=%d event_id=%s message=%s expected_prev=%s actual_prev=%s expected_hash=%s actual_hash=%s\n",
+					f.Index, f.EventID, f.Message, f.ExpectedPrevHash, f.ActualPrevHash, f.ExpectedChainHash, f.ActualChainHash,
+				)
+			}
+			return fmt.Errorf("forensic zip verify failed: audit chain mismatch")
+		}
+	}
 	return nil
 }
 
-func verifyForensicZip(path string) (total int, okCount int, failedCount int, items []zipVerifyItem, err error) {
+func verifyForensicZip(path string) (total int, okCount int, failedCount int, items []zipVerifyItem, auditRes *auditverify.Result, err error) {
 	r, err := zip.OpenReader(path)
 	if err != nil {
-		return 0, 0, 0, nil, fmt.Errorf("open zip: %w", err)
+		return 0, 0, 0, nil, nil, fmt.Errorf("open zip: %w", err)
 	}
 	defer r.Close()
 
@@ -106,11 +124,11 @@ func verifyForensicZip(path string) (total int, okCount int, failedCount int, it
 
 	hashListFile, ok := files["hashes.sha256"]
 	if !ok {
-		return 0, 0, 0, nil, fmt.Errorf("hashes.sha256 not found in zip")
+		return 0, 0, 0, nil, nil, fmt.Errorf("hashes.sha256 not found in zip")
 	}
 	rc, err := hashListFile.Open()
 	if err != nil {
-		return 0, 0, 0, nil, fmt.Errorf("open hashes.sha256: %w", err)
+		return 0, 0, 0, nil, nil, fmt.Errorf("open hashes.sha256: %w", err)
 	}
 	defer rc.Close()
 
@@ -149,7 +167,7 @@ func verifyForensicZip(path string) (total int, okCount int, failedCount int, it
 		}{SHA: sha, Path: p})
 	}
 	if err := sc.Err(); err != nil {
-		return 0, 0, 0, nil, fmt.Errorf("read hashes.sha256: %w", err)
+		return 0, 0, 0, nil, nil, fmt.Errorf("read hashes.sha256: %w", err)
 	}
 
 	items = make([]zipVerifyItem, 0, len(expected))
@@ -200,7 +218,21 @@ func verifyForensicZip(path string) (total int, okCount int, failedCount int, it
 		})
 	}
 
-	return total, okCount, failedCount, items, nil
+	// 额外强校验：manifest.json 内 audit 链（best effort；不影响 hashes.sha256 的校验结果统计）。
+	if mf, ok := files["manifest.json"]; ok {
+		data, readErr := readZipFileAll(mf)
+		if readErr == nil {
+			var payload struct {
+				Audits []model.AuditLog `json:"audits"`
+			}
+			if err := json.Unmarshal(data, &payload); err == nil {
+				r := auditverify.VerifyAuditLogs(payload.Audits)
+				auditRes = &r
+			}
+		}
+	}
+
+	return total, okCount, failedCount, items, auditRes, nil
 }
 
 func sha256OfZipFile(f *zip.File) (string, error) {
@@ -215,6 +247,15 @@ func sha256OfZipFile(f *zip.File) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+func readZipFileAll(f *zip.File) ([]byte, error) {
+	rc, err := f.Open()
+	if err != nil {
+		return nil, err
+	}
+	defer rc.Close()
+	return io.ReadAll(rc)
 }
 
 type artifactVerifyItem struct {
@@ -360,6 +401,48 @@ func runVerifyArtifacts(ctx context.Context, args []string) error {
 
 	if failCount > 0 {
 		return fmt.Errorf("artifact sha256 verify failed: %d items mismatch/missing", failCount)
+	}
+	return nil
+}
+
+func runVerifyAudits(ctx context.Context, args []string) error {
+	cfg := app.DefaultConfig()
+
+	fs := flag.NewFlagSet("verify audits", flag.ContinueOnError)
+	dbPath := fs.String("db", cfg.DBPath, "sqlite database path")
+	caseID := fs.String("case-id", "", "case id (required)")
+	limit := fs.Int("limit", 5000, "max audit logs to verify (default 5000)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if strings.TrimSpace(*caseID) == "" {
+		return fmt.Errorf("--case-id is required")
+	}
+
+	db, err := sql.Open("sqlite", *dbPath)
+	if err != nil {
+		return fmt.Errorf("open sqlite: %w", err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	_, _ = db.ExecContext(ctx, `PRAGMA busy_timeout = 5000`)
+
+	store := sqliteadapter.NewStore(db)
+	logs, err := store.ListAuditLogs(ctx, strings.TrimSpace(*caseID), *limit)
+	if err != nil {
+		return err
+	}
+
+	res := auditverify.VerifyAuditLogs(logs)
+	fmt.Println("audit chain verify completed")
+	fmt.Printf("case_id=%s total=%d failed=%d prev_hash_failed=%d chain_hash_failed=%d\n", *caseID, res.Total, res.Failed, res.PrevHashFailed, res.ChainHashFailed)
+	if !res.OK {
+		for _, f := range res.Failures {
+			fmt.Printf("FAIL index=%d event_id=%s message=%s expected_prev=%s actual_prev=%s expected_hash=%s actual_hash=%s\n",
+				f.Index, f.EventID, f.Message, f.ExpectedPrevHash, f.ActualPrevHash, f.ExpectedChainHash, f.ActualChainHash,
+			)
+		}
+		return fmt.Errorf("audit chain verify failed")
 	}
 	return nil
 }

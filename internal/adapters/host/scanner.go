@@ -1,6 +1,7 @@
 package host
 
 import (
+	"archive/zip"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -102,6 +103,9 @@ func (s *Scanner) scanWindows(ctx context.Context, caseID string, device model.D
 	}
 	out = append(out, artifact)
 
+	// P1：增强证据强度，把用于解析的原始 SQLite 库副本也落盘为 artifact（best effort）。
+	out = append(out, s.snapshotHistoryDBArtifacts(caseID, device.ID, collectWindowsHistoryDBSpecs())...)
+
 	if appErr != nil || extErr != nil || historyErr != nil {
 		var parts []string
 		if appErr != nil {
@@ -144,6 +148,9 @@ func (s *Scanner) scanMacOS(ctx context.Context, caseID string, device model.Dev
 		return nil, err
 	}
 	out = append(out, artifact)
+
+	// P1：增强证据强度，把用于解析的原始 SQLite 库副本也落盘为 artifact（best effort）。
+	out = append(out, s.snapshotHistoryDBArtifacts(caseID, device.ID, collectMacHistoryDBSpecs())...)
 
 	if appErr != nil || extErr != nil || historyErr != nil {
 		var parts []string
@@ -223,6 +230,258 @@ func (s *Scanner) makeArtifact(caseID, deviceID string, t model.ArtifactType, so
 		PayloadJSON:       raw,
 		RecordHash:        recordHash,
 	}, nil
+}
+
+// makeZipArtifact 创建“单个 zip 文件作为 snapshot_path”的证据。
+// 典型用途：保留原始 SQLite DB（含 wal/shm）副本，提升取证强度。
+func (s *Scanner) makeZipArtifact(caseID, deviceID string, t model.ArtifactType, sourceRef, method string, files map[string]string, payload any) (model.Artifact, error) {
+	now := time.Now().Unix()
+	artifactID := id.New("art")
+
+	raw, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return model.Artifact{}, fmt.Errorf("marshal payload %s: %w", t, err)
+	}
+
+	dir := filepath.Join(s.EvidenceRoot, caseID, deviceID)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return model.Artifact{}, fmt.Errorf("create evidence dir: %w", err)
+	}
+
+	name := fmt.Sprintf("%s_%s_%d.zip", string(t), sourceRef, now)
+	snapshotPath := filepath.Join(dir, sanitizeFilename(name))
+	if err := writeZip(snapshotPath, files); err != nil {
+		return model.Artifact{}, fmt.Errorf("write zip evidence file: %w", err)
+	}
+
+	sum, size, err := hash.File(snapshotPath)
+	if err != nil {
+		return model.Artifact{}, fmt.Errorf("hash evidence file: %w", err)
+	}
+
+	recordHash := hash.Text(
+		artifactID,
+		caseID,
+		deviceID,
+		string(t),
+		sourceRef,
+		snapshotPath,
+		sum,
+		fmt.Sprintf("%d", size),
+		fmt.Sprintf("%d", now),
+		"host_scanner",
+		collectorVersion,
+		string(raw),
+	)
+
+	return model.Artifact{
+		ID:                artifactID,
+		CaseID:            caseID,
+		DeviceID:          deviceID,
+		Type:              t,
+		SourceRef:         sourceRef,
+		SnapshotPath:      snapshotPath,
+		SHA256:            sum,
+		SizeBytes:         size,
+		CollectedAt:       now,
+		CollectorName:     "host_scanner",
+		CollectorVersion:  collectorVersion,
+		ParserVersion:     parserVersion,
+		AcquisitionMethod: method,
+		PayloadJSON:       raw,
+		RecordHash:        recordHash,
+	}, nil
+}
+
+type historyDBSpec struct {
+	Browser string
+	Profile string
+	Path    string
+}
+
+func (s *Scanner) snapshotHistoryDBArtifacts(caseID, deviceID string, specs []historyDBSpec) []model.Artifact {
+	if len(specs) == 0 {
+		return nil
+	}
+
+	out := make([]model.Artifact, 0, len(specs))
+	for _, sp := range specs {
+		src := strings.TrimSpace(sp.Path)
+		if src == "" {
+			continue
+		}
+		if _, err := os.Stat(src); err != nil {
+			continue
+		}
+
+		// 先复制（含 wal/shm）到临时目录，避免“浏览器锁文件 + wal 旁路数据”导致证据不完整。
+		tmpCopy, cleanup, err := copySQLiteForRead(src)
+		if err != nil {
+			continue
+		}
+
+		files := map[string]string{
+			filepath.Base(src): tmpCopy,
+		}
+		for _, suffix := range []string{"-wal", "-shm"} {
+			if _, err := os.Stat(tmpCopy + suffix); err == nil {
+				files[filepath.Base(src)+suffix] = tmpCopy + suffix
+			}
+		}
+
+		payload := map[string]any{
+			"kind":        "sqlite_snapshot_zip",
+			"browser":     sp.Browser,
+			"profile":     sp.Profile,
+			"origin_path": src,
+			"files":       sortedKeys(files),
+		}
+		sourceRef := fmt.Sprintf("%s_%s", sp.Browser, sp.Profile)
+		art, err := s.makeZipArtifact(caseID, deviceID, model.ArtifactBrowserHistoryDB, sourceRef, "sqlite_snapshot_zip", files, payload)
+		cleanup()
+		if err != nil {
+			continue
+		}
+		out = append(out, art)
+	}
+
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func collectWindowsHistoryDBSpecs() []historyDBSpec {
+	local := os.Getenv("LOCALAPPDATA")
+	appdata := os.Getenv("APPDATA")
+	if local == "" && appdata == "" {
+		return nil
+	}
+
+	var out []historyDBSpec
+	if local != "" {
+		out = append(out, chromiumHistoryDBSpecs(filepath.Join(local, "Google", "Chrome", "User Data"), "chrome")...)
+		out = append(out, chromiumHistoryDBSpecs(filepath.Join(local, "Microsoft", "Edge", "User Data"), "edge")...)
+	}
+	if appdata != "" {
+		out = append(out, firefoxPlacesDBSpecs(filepath.Join(appdata, "Mozilla", "Firefox", "Profiles"))...)
+	}
+	return out
+}
+
+func collectMacHistoryDBSpecs() []historyDBSpec {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return nil
+	}
+
+	var out []historyDBSpec
+	out = append(out, chromiumHistoryDBSpecs(filepath.Join(home, "Library", "Application Support", "Google", "Chrome"), "chrome")...)
+	out = append(out, chromiumHistoryDBSpecs(filepath.Join(home, "Library", "Application Support", "Microsoft Edge"), "edge")...)
+	out = append(out, firefoxPlacesDBSpecs(filepath.Join(home, "Library", "Application Support", "Firefox", "Profiles"))...)
+	out = append(out, safariHistoryDBSpecs(filepath.Join(home, "Library", "Safari", "History.db"))...)
+	return out
+}
+
+func chromiumHistoryDBSpecs(profileRoot, browser string) []historyDBSpec {
+	pattern := filepath.Join(profileRoot, "*", "History")
+	files, _ := filepath.Glob(pattern)
+	if len(files) == 0 {
+		return nil
+	}
+
+	out := make([]historyDBSpec, 0, len(files))
+	for _, f := range files {
+		profile := filepath.Base(filepath.Dir(f))
+		out = append(out, historyDBSpec{
+			Browser: browser,
+			Profile: profile,
+			Path:    f,
+		})
+	}
+	return out
+}
+
+func firefoxPlacesDBSpecs(profileRoot string) []historyDBSpec {
+	pattern := filepath.Join(profileRoot, "*", "places.sqlite")
+	files, _ := filepath.Glob(pattern)
+	if len(files) == 0 {
+		return nil
+	}
+
+	out := make([]historyDBSpec, 0, len(files))
+	for _, f := range files {
+		profile := filepath.Base(filepath.Dir(f))
+		out = append(out, historyDBSpec{
+			Browser: "firefox",
+			Profile: profile,
+			Path:    f,
+		})
+	}
+	return out
+}
+
+func safariHistoryDBSpecs(path string) []historyDBSpec {
+	if strings.TrimSpace(path) == "" {
+		return nil
+	}
+	if _, err := os.Stat(path); err != nil {
+		return nil
+	}
+	return []historyDBSpec{{
+		Browser: "safari",
+		Profile: "default",
+		Path:    path,
+	}}
+}
+
+func writeZip(dst string, files map[string]string) error {
+	f, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	zw := zip.NewWriter(f)
+	defer zw.Close()
+
+	keys := sortedKeys(files)
+	for _, name := range keys {
+		src := files[name]
+		if strings.TrimSpace(src) == "" {
+			continue
+		}
+		in, err := os.Open(src)
+		if err != nil {
+			return err
+		}
+
+		w, err := zw.Create(name)
+		if err != nil {
+			in.Close()
+			return err
+		}
+		if _, err := io.Copy(w, in); err != nil {
+			in.Close()
+			return err
+		}
+		in.Close()
+	}
+
+	// 确保落盘
+	if err := zw.Close(); err != nil {
+		return err
+	}
+	return f.Sync()
+}
+
+func sortedKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // sanitizeFilename 把路径/空格等字符替换为安全文件名字符。

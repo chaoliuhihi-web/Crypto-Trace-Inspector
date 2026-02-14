@@ -11,6 +11,7 @@ import (
 
 	"crypto-inspector/internal/domain/model"
 	"crypto-inspector/internal/platform/hash"
+	"crypto-inspector/internal/services/auditverify"
 	"crypto-inspector/internal/services/forensicexport"
 	"crypto-inspector/internal/services/forensicpdf"
 )
@@ -160,9 +161,72 @@ func (s *Server) handleCaseVerify(w http.ResponseWriter, r *http.Request, caseID
 	switch kind {
 	case "artifacts":
 		s.handleCaseVerifyArtifacts(w, r, caseID)
+	case "audits":
+		s.handleCaseVerifyAudits(w, r, caseID)
 	default:
 		w.WriteHeader(http.StatusNotFound)
 	}
+}
+
+// handleCaseVerifyAudits 对 audit_logs 执行“强校验”：
+// - 校验 chain_prev_hash 连续性
+// - 重算 chain_hash 并与存量字段对比
+//
+// 该接口用于发现“数据库被篡改/回滚/插入”等导致审计链不一致的情况。
+func (s *Server) handleCaseVerifyAudits(w http.ResponseWriter, r *http.Request, caseID string) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	type reqBody struct {
+		Operator string `json:"operator,omitempty"`
+		Note     string `json:"note,omitempty"`
+		Limit    int    `json:"limit,omitempty"` // 可选：默认 5000（与 ListAuditLogs 上限一致）
+	}
+	var req reqBody
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	operator := strings.TrimSpace(req.Operator)
+	if operator == "" {
+		operator = "system"
+	}
+	limit := req.Limit
+	if limit <= 0 {
+		limit = 5000
+	}
+
+	// 先拉取审计记录并校验，再写一条 verify 审计（避免“校验自身记录”导致重复/扰动）。
+	logs, err := s.store.ListAuditLogs(r.Context(), caseID, limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	res := auditverify.VerifyAuditLogs(logs)
+
+	status := "success"
+	if !res.OK {
+		status = "failed"
+	}
+	_ = s.store.AppendAudit(r.Context(), caseID, "", "verify", "audit_chain", status, operator, "webapp.handleCaseVerifyAudits", map[string]any{
+		"note":              strings.TrimSpace(req.Note),
+		"total":             res.Total,
+		"failed":            res.Failed,
+		"prev_hash_failed":  res.PrevHashFailed,
+		"chain_hash_failed": res.ChainHashFailed,
+		"limit":             limit,
+	})
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":                res.OK,
+		"case_id":           caseID,
+		"total":             res.Total,
+		"failed":            res.Failed,
+		"prev_hash_failed":  res.PrevHashFailed,
+		"chain_hash_failed": res.ChainHashFailed,
+		"last_chain_hash":   res.LastChainHash,
+		"failures":          res.Failures,
+	})
 }
 
 // handleCaseVerifyArtifacts 对案件下的证据快照进行 sha256 复核：

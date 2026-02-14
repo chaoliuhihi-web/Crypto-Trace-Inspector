@@ -7,6 +7,7 @@ import type {
   ChainEVMBalancesResponse,
   ChainEVMERC20BalancesResponse,
   CaseArtifactVerifyResponse,
+  CaseAuditVerifyResponse,
   MetaResponse,
   PrecheckResult,
   HitDetail,
@@ -212,6 +213,16 @@ export const api = {
         body: JSON.stringify(payload ?? {}),
       }
     ),
+
+  // 审计链强校验（重算 chain_hash + 校验 chain_prev_hash 连续）
+  verifyCaseAudits: (
+    caseId: string,
+    payload?: { operator?: string; note?: string; limit?: number }
+  ) =>
+    requestJSON<CaseAuditVerifyResponse>(`/api/cases/${caseId}/verify/audits`, {
+      method: "POST",
+      body: JSON.stringify(payload ?? {}),
+    }),
 
   startScanAll: (payload: {
     operator?: string;

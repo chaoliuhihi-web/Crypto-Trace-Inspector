@@ -281,6 +281,10 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 			return nil, err
 		}
 	}
+	// 采集器层面的 prechecks（例如：浏览历史 best-effort 采集是否成功、为何 skipped）。
+	if len(scanResult.Prechecks) > 0 {
+		prechecks = append(prechecks, scanResult.Prechecks...)
+	}
 	if err := store.SavePrecheckResults(ctx, prechecks); err != nil {
 		return nil, err
 	}

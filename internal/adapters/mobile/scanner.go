@@ -35,6 +35,9 @@ type ConnectedDevice struct {
 type ScanResult struct {
 	Devices   []ConnectedDevice
 	Artifacts []model.Artifact
+	// Prechecks 用于把“采集能力/采集结果”以结构化方式返回给上层，
+	// 由上层落入 precheck_results 表并在 UI 中展示。
+	Prechecks []model.PrecheckResult
 	Warnings  []string
 }
 
@@ -72,24 +75,26 @@ func (s *Scanner) Scan(ctx context.Context, caseID string) (*ScanResult, error) 
 	out := &ScanResult{}
 
 	if s.EnableAndroid {
-		androidDevices, androidArtifacts, androidWarnings, err := s.scanAndroid(ctx, caseID)
+		androidDevices, androidArtifacts, androidPrechecks, androidWarnings, err := s.scanAndroid(ctx, caseID)
 		if err != nil {
 			return nil, err
 		}
 		out.Devices = append(out.Devices, androidDevices...)
 		out.Artifacts = append(out.Artifacts, androidArtifacts...)
+		out.Prechecks = append(out.Prechecks, androidPrechecks...)
 		out.Warnings = append(out.Warnings, androidWarnings...)
 	} else {
 		out.Warnings = append(out.Warnings, "android scan disabled by request")
 	}
 
 	if s.EnableIOS {
-		iosDevices, iosArtifacts, iosWarnings, err := s.scanIOS(ctx, caseID)
+		iosDevices, iosArtifacts, iosPrechecks, iosWarnings, err := s.scanIOS(ctx, caseID)
 		if err != nil {
 			return nil, err
 		}
 		out.Devices = append(out.Devices, iosDevices...)
 		out.Artifacts = append(out.Artifacts, iosArtifacts...)
+		out.Prechecks = append(out.Prechecks, iosPrechecks...)
 		out.Warnings = append(out.Warnings, iosWarnings...)
 	} else {
 		out.Warnings = append(out.Warnings, "ios scan disabled by request")
@@ -98,19 +103,20 @@ func (s *Scanner) Scan(ctx context.Context, caseID string) (*ScanResult, error) 
 	return out, nil
 }
 
-func (s *Scanner) scanAndroid(ctx context.Context, caseID string) ([]ConnectedDevice, []model.Artifact, []string, error) {
+func (s *Scanner) scanAndroid(ctx context.Context, caseID string) ([]ConnectedDevice, []model.Artifact, []model.PrecheckResult, []string, error) {
 	if _, err := exec.LookPath("adb"); err != nil {
-		return nil, nil, []string{"adb not found, skip android scan"}, nil
+		return nil, nil, nil, []string{"adb not found, skip android scan"}, nil
 	}
 
 	raw, err := runCmd(ctx, "adb", "devices")
 	if err != nil {
-		return nil, nil, []string{"adb devices failed: " + err.Error()}, nil
+		return nil, nil, nil, []string{"adb devices failed: " + err.Error()}, nil
 	}
 
 	devices := parseADBDevices(raw)
 	var connected []ConnectedDevice
 	var artifacts []model.Artifact
+	var prechecks []model.PrecheckResult
 	var warnings []string
 
 	for _, d := range devices {
@@ -129,12 +135,40 @@ func (s *Scanner) scanAndroid(ctx context.Context, caseID string) ([]ConnectedDe
 
 		if d.State != "device" {
 			warnings = append(warnings, fmt.Sprintf("android device %s not authorized/state=%s", d.Serial, d.State))
+			prechecks = append(prechecks, model.PrecheckResult{
+				CaseID:    caseID,
+				DeviceID:  dev.ID,
+				ScanScope: "mobile",
+				CheckCode: "android_browser_history",
+				CheckName: "Android 浏览历史采集（best effort）",
+				Required:  false,
+				Status:    model.PrecheckSkipped,
+				Message:   fmt.Sprintf("device state=%s (need USB debugging authorization)", d.State),
+				CheckedAt: time.Now().Unix(),
+				DetailJSON: mustJSON(map[string]any{
+					"serial": d.Serial,
+				}),
+			})
 			continue
 		}
 
 		pkgsRaw, err := runCmd(ctx, "adb", "-s", d.Serial, "shell", "pm", "list", "packages")
 		if err != nil {
 			warnings = append(warnings, fmt.Sprintf("collect android packages failed (%s): %v", d.Serial, err))
+			prechecks = append(prechecks, model.PrecheckResult{
+				CaseID:    caseID,
+				DeviceID:  dev.ID,
+				ScanScope: "mobile",
+				CheckCode: "android_packages",
+				CheckName: "Android 应用清单采集（pm list packages）",
+				Required:  false,
+				Status:    model.PrecheckSkipped,
+				Message:   err.Error(),
+				CheckedAt: time.Now().Unix(),
+				DetailJSON: mustJSON(map[string]any{
+					"serial": d.Serial,
+				}),
+			})
 			continue
 		}
 
@@ -151,27 +185,109 @@ func (s *Scanner) scanAndroid(ctx context.Context, caseID string) ([]ConnectedDe
 
 		art, err := s.makeArtifact(caseID, dev.ID, model.ArtifactMobilePackages, "android_pm_packages", "adb_shell_pm", records)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 		artifacts = append(artifacts, art)
+		prechecks = append(prechecks, model.PrecheckResult{
+			CaseID:    caseID,
+			DeviceID:  dev.ID,
+			ScanScope: "mobile",
+			CheckCode: "android_packages",
+			CheckName: "Android 应用清单采集（pm list packages）",
+			Required:  false,
+			Status:    model.PrecheckPassed,
+			Message:   fmt.Sprintf("ok (%d packages)", len(records)),
+			CheckedAt: time.Now().Unix(),
+			DetailJSON: mustJSON(map[string]any{
+				"serial": d.Serial,
+			}),
+		})
+
+		// Android 浏览历史采集（best effort）：
+		// - 不做“破解/绕过”，只尝试系统允许的接口
+		// - 大多数现代 Android 机型会限制 shell 读取浏览历史，因此这里必须允许 skipped
+		hres, herr := collectAndroidBrowserHistory(ctx, d.Serial)
+		if herr != nil {
+			warnings = append(warnings, fmt.Sprintf("collect android browser history skipped (%s): %v", d.Serial, herr))
+			prechecks = append(prechecks, model.PrecheckResult{
+				CaseID:    caseID,
+				DeviceID:  dev.ID,
+				ScanScope: "mobile",
+				CheckCode: "android_browser_history",
+				CheckName: "Android 浏览历史采集（best effort）",
+				Required:  false,
+				Status:    model.PrecheckSkipped,
+				Message:   herr.Error(),
+				CheckedAt: time.Now().Unix(),
+				DetailJSON: mustJSON(map[string]any{
+					"serial":   d.Serial,
+					"method":   hres.Method,
+					"used_uri": hres.UsedURI,
+					"attempts": hres.Attempts,
+				}),
+			})
+		} else if len(hres.Visits) == 0 {
+			prechecks = append(prechecks, model.PrecheckResult{
+				CaseID:    caseID,
+				DeviceID:  dev.ID,
+				ScanScope: "mobile",
+				CheckCode: "android_browser_history",
+				CheckName: "Android 浏览历史采集（best effort）",
+				Required:  false,
+				Status:    model.PrecheckSkipped,
+				Message:   "no history extracted (device may block access)",
+				CheckedAt: time.Now().Unix(),
+				DetailJSON: mustJSON(map[string]any{
+					"serial":   d.Serial,
+					"method":   hres.Method,
+					"used_uri": hres.UsedURI,
+					"attempts": hres.Attempts,
+				}),
+			})
+		} else {
+			prechecks = append(prechecks, model.PrecheckResult{
+				CaseID:    caseID,
+				DeviceID:  dev.ID,
+				ScanScope: "mobile",
+				CheckCode: "android_browser_history",
+				CheckName: "Android 浏览历史采集（best effort）",
+				Required:  false,
+				Status:    model.PrecheckPassed,
+				Message:   fmt.Sprintf("ok (%d visits)", len(hres.Visits)),
+				CheckedAt: time.Now().Unix(),
+				DetailJSON: mustJSON(map[string]any{
+					"serial":   d.Serial,
+					"method":   hres.Method,
+					"used_uri": hres.UsedURI,
+					"attempts": hres.Attempts,
+				}),
+			})
+
+			hArt, err := s.makeArtifact(caseID, dev.ID, model.ArtifactBrowserHistory, hres.SourceRef, hres.Method, hres.Visits)
+			if err != nil {
+				return nil, nil, nil, nil, err
+			}
+			artifacts = append(artifacts, hArt)
+		}
 	}
 
-	return connected, artifacts, warnings, nil
+	return connected, artifacts, prechecks, warnings, nil
 }
 
-func (s *Scanner) scanIOS(ctx context.Context, caseID string) ([]ConnectedDevice, []model.Artifact, []string, error) {
+func (s *Scanner) scanIOS(ctx context.Context, caseID string) ([]ConnectedDevice, []model.Artifact, []model.PrecheckResult, []string, error) {
 	if _, err := exec.LookPath("idevice_id"); err != nil {
-		return nil, nil, []string{"idevice_id not found, skip ios scan"}, nil
+		return nil, nil, nil, []string{"idevice_id not found, skip ios scan"}, nil
 	}
 
 	raw, err := runCmd(ctx, "idevice_id", "-l")
 	if err != nil {
-		return nil, nil, []string{"idevice_id -l failed: " + err.Error()}, nil
+		return nil, nil, nil, []string{"idevice_id -l failed: " + err.Error()}, nil
 	}
 
 	udids := parseUDIDs(raw)
 	var connected []ConnectedDevice
 	var artifacts []model.Artifact
+	var prechecks []model.PrecheckResult
 	var warnings []string
 
 	for _, udid := range udids {
@@ -228,25 +344,173 @@ func (s *Scanner) scanIOS(ctx context.Context, caseID string) ([]ConnectedDevice
 		}}
 		backupArtifact, err := s.makeArtifact(caseID, dev.ID, model.ArtifactMobileBackup, "ios_backup_stub", "ios_backup_stub", backupRecords)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 		artifacts = append(artifacts, backupArtifact)
 
 		if !authorized {
+			prechecks = append(prechecks, model.PrecheckResult{
+				CaseID:    caseID,
+				DeviceID:  dev.ID,
+				ScanScope: "mobile",
+				CheckCode: "ios_browser_history",
+				CheckName: "iOS 浏览历史采集（备份，best effort）",
+				Required:  false,
+				Status:    model.PrecheckSkipped,
+				Message:   "device not authorized, skip backup parsing",
+				CheckedAt: time.Now().Unix(),
+				DetailJSON: mustJSON(map[string]any{
+					"udid": udid,
+				}),
+			})
 			continue
 		}
 
-		// iOS Safari 浏览历史（best effort）：
+		// iOS 浏览历史（best effort）：
 		// - 依赖 iOS 全量备份可读（未加密/已解密）
-		// - 从 Manifest.db 定位 History.db 并解析为统一 VisitRecord
-		if visits, err := extractIOSSafariHistoryFromBackup(ctx, backupRoot); err != nil {
-			warnings = append(warnings, fmt.Sprintf("extract ios safari history failed (%s): %v", udid, err))
-		} else if len(visits) > 0 {
-			historyArtifact, err := s.makeArtifact(caseID, dev.ID, model.ArtifactBrowserHistory, "ios_safari_history", "ios_backup_manifest", visits)
-			if err != nil {
-				return nil, nil, nil, err
+		// - 从 Manifest.db 定位各浏览器的 History DB 并解析为统一 VisitRecord
+		manifestPath := filepath.Join(backupRoot, "Manifest.db")
+		if _, err := os.Stat(manifestPath); err != nil {
+			prechecks = append(prechecks, model.PrecheckResult{
+				CaseID:    caseID,
+				DeviceID:  dev.ID,
+				ScanScope: "mobile",
+				CheckCode: "ios_backup_manifest",
+				CheckName: "iOS 备份可读（Manifest.db）",
+				Required:  false,
+				Status:    model.PrecheckSkipped,
+				Message:   fmt.Sprintf("Manifest.db not found under %s (enable full backup or provide readable backup)", backupRoot),
+				CheckedAt: time.Now().Unix(),
+				DetailJSON: mustJSON(map[string]any{
+					"udid":        udid,
+					"backup_root": backupRoot,
+				}),
+			})
+		} else {
+			prechecks = append(prechecks, model.PrecheckResult{
+				CaseID:    caseID,
+				DeviceID:  dev.ID,
+				ScanScope: "mobile",
+				CheckCode: "ios_backup_manifest",
+				CheckName: "iOS 备份可读（Manifest.db）",
+				Required:  false,
+				Status:    model.PrecheckPassed,
+				Message:   "ok",
+				CheckedAt: time.Now().Unix(),
+				DetailJSON: mustJSON(map[string]any{
+					"udid":        udid,
+					"backup_root": backupRoot,
+				}),
+			})
+
+			// Safari
+			if visits, err := extractIOSSafariHistoryFromBackup(ctx, backupRoot); err != nil {
+				// Safari history 不一定存在（不同版本/备份策略），按 skipped 处理，但保留错误信息便于排查。
+				prechecks = append(prechecks, model.PrecheckResult{
+					CaseID:    caseID,
+					DeviceID:  dev.ID,
+					ScanScope: "mobile",
+					CheckCode: "ios_safari_history",
+					CheckName: "iOS Safari 浏览历史提取（备份）",
+					Required:  false,
+					Status:    model.PrecheckSkipped,
+					Message:   err.Error(),
+					CheckedAt: time.Now().Unix(),
+					DetailJSON: mustJSON(map[string]any{
+						"udid": udid,
+					}),
+				})
+			} else if len(visits) == 0 {
+				prechecks = append(prechecks, model.PrecheckResult{
+					CaseID:    caseID,
+					DeviceID:  dev.ID,
+					ScanScope: "mobile",
+					CheckCode: "ios_safari_history",
+					CheckName: "iOS Safari 浏览历史提取（备份）",
+					Required:  false,
+					Status:    model.PrecheckSkipped,
+					Message:   "no visits parsed",
+					CheckedAt: time.Now().Unix(),
+					DetailJSON: mustJSON(map[string]any{
+						"udid": udid,
+					}),
+				})
+			} else {
+				prechecks = append(prechecks, model.PrecheckResult{
+					CaseID:    caseID,
+					DeviceID:  dev.ID,
+					ScanScope: "mobile",
+					CheckCode: "ios_safari_history",
+					CheckName: "iOS Safari 浏览历史提取（备份）",
+					Required:  false,
+					Status:    model.PrecheckPassed,
+					Message:   fmt.Sprintf("ok (%d visits)", len(visits)),
+					CheckedAt: time.Now().Unix(),
+					DetailJSON: mustJSON(map[string]any{
+						"udid": udid,
+					}),
+				})
+
+				historyArtifact, err := s.makeArtifact(caseID, dev.ID, model.ArtifactBrowserHistory, "ios_safari_history", "ios_backup_manifest", visits)
+				if err != nil {
+					return nil, nil, nil, nil, err
+				}
+				artifacts = append(artifacts, historyArtifact)
 			}
-			artifacts = append(artifacts, historyArtifact)
+
+			// Chrome（best effort）
+			if visits, err := extractIOSChromeHistoryFromBackup(ctx, backupRoot); err != nil {
+				prechecks = append(prechecks, model.PrecheckResult{
+					CaseID:    caseID,
+					DeviceID:  dev.ID,
+					ScanScope: "mobile",
+					CheckCode: "ios_chrome_history",
+					CheckName: "iOS Chrome 浏览历史提取（备份，best effort）",
+					Required:  false,
+					Status:    model.PrecheckSkipped,
+					Message:   err.Error(),
+					CheckedAt: time.Now().Unix(),
+					DetailJSON: mustJSON(map[string]any{
+						"udid": udid,
+					}),
+				})
+			} else if len(visits) == 0 {
+				prechecks = append(prechecks, model.PrecheckResult{
+					CaseID:    caseID,
+					DeviceID:  dev.ID,
+					ScanScope: "mobile",
+					CheckCode: "ios_chrome_history",
+					CheckName: "iOS Chrome 浏览历史提取（备份，best effort）",
+					Required:  false,
+					Status:    model.PrecheckSkipped,
+					Message:   "no visits parsed",
+					CheckedAt: time.Now().Unix(),
+					DetailJSON: mustJSON(map[string]any{
+						"udid": udid,
+					}),
+				})
+			} else {
+				prechecks = append(prechecks, model.PrecheckResult{
+					CaseID:    caseID,
+					DeviceID:  dev.ID,
+					ScanScope: "mobile",
+					CheckCode: "ios_chrome_history",
+					CheckName: "iOS Chrome 浏览历史提取（备份，best effort）",
+					Required:  false,
+					Status:    model.PrecheckPassed,
+					Message:   fmt.Sprintf("ok (%d visits)", len(visits)),
+					CheckedAt: time.Now().Unix(),
+					DetailJSON: mustJSON(map[string]any{
+						"udid": udid,
+					}),
+				})
+
+				historyArtifact, err := s.makeArtifact(caseID, dev.ID, model.ArtifactBrowserHistory, "ios_chrome_history", "ios_backup_manifest", visits)
+				if err != nil {
+					return nil, nil, nil, nil, err
+				}
+				artifacts = append(artifacts, historyArtifact)
+			}
 		}
 
 		packages, err := collectIOSPackages(ctx, udid)
@@ -265,12 +529,12 @@ func (s *Scanner) scanIOS(ctx context.Context, caseID string) ([]ConnectedDevice
 		}
 		packagesArtifact, err := s.makeArtifact(caseID, dev.ID, model.ArtifactMobilePackages, "ios_installed_apps", "ideviceinstaller_list", records)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 		artifacts = append(artifacts, packagesArtifact)
 	}
 
-	return connected, artifacts, warnings, nil
+	return connected, artifacts, prechecks, warnings, nil
 }
 
 func (s *Scanner) makeArtifact(caseID, deviceID string, t model.ArtifactType, sourceRef, method string, payload any) (model.Artifact, error) {
@@ -335,6 +599,14 @@ func (s *Scanner) makeArtifact(caseID, deviceID string, t model.ArtifactType, so
 func sanitizeFilename(in string) string {
 	r := strings.NewReplacer("/", "_", "\\", "_", ":", "_", " ", "_")
 	return r.Replace(in)
+}
+
+func mustJSON(v any) []byte {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return []byte("{}")
+	}
+	return raw
 }
 
 type adbDevice struct {

@@ -32,6 +32,9 @@ const (
 	ArtifactBrowserExt ArtifactType = "browser_extension"
 	// ArtifactBrowserHistory 浏览历史证据。
 	ArtifactBrowserHistory ArtifactType = "browser_history"
+	// ArtifactBrowserHistoryDB 浏览历史原始 SQLite DB 快照（zip，包含 db + -wal/-shm）。
+	// 该证据用于提升取证强度：不仅保留“解析后的记录”，也保留“解析所依赖的原始库副本”。
+	ArtifactBrowserHistoryDB ArtifactType = "browser_history_db"
 	// ArtifactMobilePackages 移动端安装包/应用清单证据。
 	ArtifactMobilePackages ArtifactType = "mobile_packages"
 	// ArtifactMobileBackup 移动端备份元数据证据（骨架阶段）。

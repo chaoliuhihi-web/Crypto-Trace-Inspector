@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, CheckCircle2 } from "lucide-react";
 import { api } from "../api/client";
-import type { AuditLog } from "../api/types";
+import type { AuditLog, CaseAuditVerifyResponse } from "../api/types";
 import { useApp } from "../state/AppContext";
 
 function formatTime(ts: number) {
@@ -10,9 +10,12 @@ function formatTime(ts: number) {
 }
 
 export default function AuditVerification() {
-  const { selectedCaseId } = useApp();
+  const { selectedCaseId, operator } = useApp();
   const [audits, setAudits] = useState<AuditLog[]>([]);
   const [verifiedAt, setVerifiedAt] = useState<number>(0);
+  const [strong, setStrong] = useState<CaseAuditVerifyResponse | null>(null);
+  const [strongLoading, setStrongLoading] = useState<boolean>(false);
+  const [strongMsg, setStrongMsg] = useState<string>("");
 
   const refresh = async () => {
     if (!selectedCaseId) return;
@@ -30,6 +33,27 @@ export default function AuditVerification() {
     refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedCaseId]);
+
+  const runStrongVerify = async () => {
+    if (!selectedCaseId) return;
+    setStrongLoading(true);
+    setStrongMsg("");
+    try {
+      const res = await api.verifyCaseAudits(selectedCaseId, {
+        operator,
+        note: "ui_strong_verify",
+        limit: 5000,
+      });
+      setStrong(res);
+      setStrongMsg(res.ok ? "强校验通过" : "强校验失败");
+      await refresh(); // verify 会追加一条审计记录，刷新以便 UI 同步展示
+    } catch (e: any) {
+      setStrong(null);
+      setStrongMsg(`ERROR: ${e?.message || String(e)}`);
+    } finally {
+      setStrongLoading(false);
+    }
+  };
 
   const verify = useMemo(() => {
     if (audits.length === 0) {
@@ -80,12 +104,21 @@ export default function AuditVerification() {
           </div>
         </div>
 
-        <button
-          onClick={refresh}
-          className="bg-[#2b5278] hover:bg-[#365f8a] border border-[#4fc3f7] text-[#4fc3f7] px-6 py-2 text-xs rounded transition-colors"
-        >
-          [执行完整性校验]
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={refresh}
+            className="bg-[#2b5278] hover:bg-[#365f8a] border border-[#4fc3f7] text-[#4fc3f7] px-6 py-2 text-xs rounded transition-colors"
+          >
+            [刷新审计列表]
+          </button>
+          <button
+            disabled={!selectedCaseId || strongLoading}
+            onClick={runStrongVerify}
+            className="bg-[#1e2127] hover:bg-[#252931] disabled:opacity-50 border border-[#5a5f6a] text-[#b8bcc4] px-6 py-2 text-xs rounded transition-colors"
+          >
+            [{strongLoading ? "强校验中..." : "执行强校验"}]
+          </button>
+        </div>
 
         {/* 校验状态 */}
         <div className="mt-4 pt-4 border-t border-[#3a3f4a]">
@@ -112,10 +145,44 @@ export default function AuditVerification() {
             <div className="flex items-center gap-3 bg-[#1a2f1f] border border-green-500 rounded p-3">
               <CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0" />
               <div className="text-sm text-green-500">
-                审计链完整性校验通过（chain_prev_hash 连续）
+                快速校验通过（chain_prev_hash 连续）
               </div>
             </div>
           )}
+
+          {/* 强校验结果（服务端重算 chain_hash） */}
+          <div className="mt-3">
+            {strong ? (
+              strong.ok ? (
+                <div className="flex items-center gap-3 bg-[#1a2f1f] border border-green-500 rounded p-3">
+                  <CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0" />
+                  <div className="text-sm text-green-500">
+                    强校验通过（prev_hash 连续 + chain_hash 重算一致）
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-start gap-3 bg-[#3d2817] border border-[#ffa726] rounded p-3">
+                  <AlertTriangle className="w-5 h-5 text-[#ffa726] flex-shrink-0 mt-0.5" />
+                  <div className="flex-1">
+                    <div className="text-sm font-bold text-[#ffa726] mb-2">
+                      强校验失败：failed={strong.failed}（prev_hash_failed={strong.prev_hash_failed} chain_hash_failed={strong.chain_hash_failed}）
+                    </div>
+                    {strong.failures?.length ? (
+                      <div className="text-xs text-[#b8bcc4] font-mono break-all">
+                        first_failure event_id={strong.failures[0].event_id} message={strong.failures[0].message}
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              )
+            ) : strongMsg ? (
+              <div className="text-xs text-[#b8bcc4] font-mono">{strongMsg}</div>
+            ) : (
+              <div className="text-xs text-[#7a7f8a]">
+                提示：强校验会在服务端重算每条记录的 chain_hash，并输出不一致明细（推荐用于取证/审计复核）。
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -206,4 +273,3 @@ export default function AuditVerification() {
     </div>
   );
 }
-
