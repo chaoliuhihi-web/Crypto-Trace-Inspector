@@ -21,3 +21,8 @@ output/
 
 # Local requirement docs (可能包含敏感信息，不建议提交到远端)
 功能需求.pdf
+
+# Private agent notes (never commit)
+MEMORY.private.md
+memory/private/
+memory/*private*.md
